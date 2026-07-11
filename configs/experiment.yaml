@@ -1,0 +1,20 @@
+# Experiment-level config (training budget, logging, reproducibility)
+
+seed: 42
+device: "cpu"             # "cuda" | "cpu" | "auto" — MPS OOMs on this dataset/model
+deterministic: true
+
+# Per-model training budget — all models train under the same wall-clock
+# budget to keep the comparison fair.
+budget:
+  max_epochs: 100
+  early_stopping_patience: 15
+  max_minutes: 60         # hard wall-clock cap per model on laptop GPU
+
+# Logging
+log:
+  every_n_steps: 50
+  save_top_k: 1
+  metrics_dir: "results/metrics"
+  checkpoints_dir: "results/checkpoints"
+  figures_dir: "results/figures"

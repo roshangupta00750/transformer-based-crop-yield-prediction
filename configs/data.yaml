@@ -1,0 +1,87 @@
+# Dataset configuration
+# All scripts read this file. Override individual fields on the CLI if needed.
+
+# ---- Scope --------------------------------------------------------------
+crops:
+  - winter_wheat
+  - winter_barley
+  - rye
+  - triticale
+  - winter_rapeseed
+  - summer_barley
+  - oats
+  - silage_maize
+  - potatoes
+  - sugar_beet
+
+years:
+  start: 2003
+  end: 2023
+
+# Comma-separated list of NUTS-3 (Landkreis) codes, or "all" to use every Landkreis
+# in the yield table. Default keeps things small for development.
+landkreise: "all"
+
+# ---- Temporal granularity -----------------------------------------------
+# Weather is daily; satellite is composited to N-day intervals.
+weather_freq: "D"               # pandas freq string
+satellite_composite_days: 10    # 10-day NDVI/EVI/LAI composites
+
+# ---- Phenology window (per crop, used to slice the time series) ---------
+# Approximate German growing-season start/end (DOY = day of year).
+# Winter crops: sowing_doy > harvest_doy (sown previous autumn, harvested
+# the following summer) → window is [1, harvest_doy] of the harvest year.
+# Summer crops: sowing_doy < harvest_doy → window is [sowing_doy, harvest_doy].
+phenology:
+  # --- Winter crops (autumn-sown) ---
+  winter_wheat:
+    sowing_doy: 280     # ~early October (previous year)
+    harvest_doy: 220    # ~early August
+  winter_barley:
+    sowing_doy: 270     # ~late September
+    harvest_doy: 195    # ~mid July (earliest-harvested cereal)
+  rye:
+    sowing_doy: 270     # ~late September
+    harvest_doy: 210    # ~late July
+  triticale:
+    sowing_doy: 275     # ~early October
+    harvest_doy: 215    # ~early August
+  winter_rapeseed:
+    sowing_doy: 235     # ~late August (previous year)
+    harvest_doy: 200    # ~mid July
+  # --- Summer crops (spring-sown) ---
+  summer_barley:
+    sowing_doy: 80      # ~late March
+    harvest_doy: 215    # ~early August
+  oats:
+    sowing_doy: 90      # ~end of March
+    harvest_doy: 235    # ~late August
+  silage_maize:
+    sowing_doy: 120     # ~early May
+    harvest_doy: 270    # ~late September
+  potatoes:
+    sowing_doy: 105     # ~mid April
+    harvest_doy: 270    # ~late September
+  sugar_beet:
+    sowing_doy: 95      # ~early April
+    harvest_doy: 300    # ~late October
+
+# ---- Splits -------------------------------------------------------------
+splits:
+  temporal:
+    train_end_year: 2020
+    val_years: [2021]
+    test_years: [2022, 2023]
+  spatial:
+    strategy: "leave-one-out"   # or "stratified"
+    sample_size: 50             # subsample N Landkreise for LOO sweep
+
+# ---- Horizons (days before harvest at which to evaluate) ----------------
+in_season_horizons_days: [30, 60, 90, 120]
+
+# ---- Paths --------------------------------------------------------------
+paths:
+  raw: "data/raw"
+  interim: "data/interim"
+  processed: "data/processed"
+  unified_dataset: "data/processed/dataset.parquet"

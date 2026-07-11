@@ -1,0 +1,9 @@
+# iTransformer (Liu et al., ICLR 2024)
+name: itransformer
+d_model: 128
+n_heads: 8
+n_layers: 3
+d_ff: 256
+dropout: 0.1
+learning_rate: 0.0005
+batch_size: 128

@@ -1,0 +1,53 @@
+# Data — raw sources stay out; specific processed artefacts are bundled
+# (see exceptions below) so Streamlit Cloud renders directly from the repo.
+data/raw/
+data/interim/
+data/processed/*
+*.nc
+*.tif
+*.feather
+
+# ── Exceptions: bundle these small processed artefacts ──────────────
+!data/processed/dataset.parquet
+!data/processed/cmip6_nuts3.parquet
+
+# Bundle the fused-model prediction caches (small; recomputing needs
+# checkpoints we do not distribute).
+!results/metrics/fusion_predictions_val.parquet
+!results/metrics/fusion_predictions_test.parquet
+
+# Results
+results/checkpoints/
+!results/checkpoints/*.pipeline.json
+results/metrics/*.json
+results/figures/*.png
+results/figures/*.pdf
+!results/figures/.gitkeep
+
+# Zenodo staging (built by a release script, not committed)
+release/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+*.key
+gee-service-account.json

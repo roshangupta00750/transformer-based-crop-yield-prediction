@@ -1,0 +1,88 @@
+# Crop Yield Benchmark — Run Commands
+#
+# Every command assumes you're in the project root and the conda env is active:
+#   cd /Users/roshangupta/Documents/Claude/Projects/Agriculture/crop_yield_benchmark
+#   conda activate agri
+#
+# All training/eval commands set OMP_NUM_THREADS=1 to avoid the macOS Intel
+# libomp segfault. The dashboard's run.sh does this automatically.
+
+# ─────────────────────────────────────────────────────────────────────
+# 1) DASHBOARD (recommended for everyday use)
+# ─────────────────────────────────────────────────────────────────────
+
+# Recommended: launcher script sets OMP/MKL env vars + cd's to repo root.
+./dashboard/run.sh
+
+# Or invoke streamlit directly (Home.py already sets the env vars):
+streamlit run dashboard/Home.py
+
+# Opens at http://localhost:8501
+# Stop with Ctrl+C in the terminal.
+
+# ─────────────────────────────────────────────────────────────────────
+# 2) DATA PIPELINE (run once, or when a source changes)
+# ─────────────────────────────────────────────────────────────────────
+
+# Build NUTS-3 geo + station mapping (one-time).
+python scripts/00_build_geo.py
+
+# Download raw data (set credentials first):
+#   REGIO_USER / REGIO_PASS   regionalstatistik.de account
+#   earthengine authenticate  one-time GEE OAuth
+python scripts/01_download_data.py --source all
+
+# Clean each source + build unified parquet (data/processed/dataset.parquet).
+python scripts/02_preprocess.py
+
+# ─────────────────────────────────────────────────────────────────────
+# 3) TRAIN SINGLE MODEL
+# ─────────────────────────────────────────────────────────────────────
+
+# Multi-crop training (uses every crop listed in configs/data.yaml).
+OMP_NUM_THREADS=1 python scripts/03_train.py --model xgboost
+
+# Single-crop training (filter to one crop).
+OMP_NUM_THREADS=1 python scripts/03_train.py --model lstm --crop winter_wheat
+
+# Absolute-yield track (predicts raw yield, not anomaly).
+OMP_NUM_THREADS=1 python scripts/03_train.py --model xgboost --no-anomaly --suffix _abs
+
+# Available models: xgboost dlinear lstm patchtst itransformer tft
+# Wall-clock caps: TFT 55 min (enforced); LSTM/DLinear/PatchTST/iTransformer 60 min;
+# XGBoost ~1 min on 10 crops.
+
+# ─────────────────────────────────────────────────────────────────────
+# 4) TRAIN ALL MODELS SEQUENTIALLY
+# ─────────────────────────────────────────────────────────────────────
+
+# Runs dlinear -> itransformer -> lstm -> patchtst -> tft, ~3-4 hours total.
+./scripts/train_all_multicrop.sh
+
+# ─────────────────────────────────────────────────────────────────────
+# 5) EVALUATE
+# ─────────────────────────────────────────────────────────────────────
+
+# Per-(model, crop) horizon metrics -> results/metrics/<model>_<crop>_horizons.json
+OMP_NUM_THREADS=1 python scripts/04_evaluate.py --model xgboost --crop winter_wheat
+
+# TFT needs its own evaluator (pf TimeSeriesDataSet path).
+OMP_NUM_THREADS=1 python scripts/04b_evaluate_tft.py --crop winter_wheat
+
+# Multi-crop summary: 6 models x 10 crops -> multicrop_summary.csv + leaderboard.csv
+OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=TRUE \
+  python scripts/05b_eval_multicrop.py
+
+# Comparison plot + per-(model, horizon) CSV -> results/figures/horizon_rmse.png
+OMP_NUM_THREADS=1 python scripts/05_compare_results.py
+
+# ─────────────────────────────────────────────────────────────────────
+# 6) BACKGROUND (long jobs) WITHOUT TYING UP THE TERMINAL
+# ─────────────────────────────────────────────────────────────────────
+
+nohup ./scripts/train_all_multicrop.sh > /tmp/train_all_multicrop.log 2>&1 &
+disown
+
+# Check progress later:
+tail -30 /tmp/train_all_multicrop.log
+ls -lt results/checkpoints/*.pt

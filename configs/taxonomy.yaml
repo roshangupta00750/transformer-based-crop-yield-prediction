@@ -1,0 +1,192 @@
+# Crop-Model Compatibility Taxonomy
+# ====================================
+# Encodes a priori hypotheses about which model architecture should win
+# for each crop, based on the biological structure of yield formation and
+# the inductive biases of each architecture.
+#
+# Used by ``scripts/14_taxonomy_validate.py`` to compare predicted winners
+# against observed test R² and by ``dashboard/pages/16_Taxonomy.py`` to
+# surface the analysis.
+
+crops:
+  # ── Winter cereals ─────────────────────────────────────────────────────
+  winter_wheat:
+    season_length_days: 300         # Sep planting → Jul harvest
+    critical_windows: 2             # tillering + grain-fill
+    yield_signal_window: narrow     # anthesis → grain-fill, ~40 days
+    water_sensitivity: high         # drought during grain-fill is catastrophic
+    temp_sensitivity: medium
+    harvest_timing_sensitivity: low
+    feature_interaction_order: medium
+    phenology_family: winter_cereal
+
+  winter_barley:
+    season_length_days: 285
+    critical_windows: 2
+    yield_signal_window: narrow
+    water_sensitivity: high
+    temp_sensitivity: medium
+    harvest_timing_sensitivity: low
+    feature_interaction_order: medium
+    phenology_family: winter_cereal
+
+  rye:
+    season_length_days: 315
+    critical_windows: 2
+    yield_signal_window: narrow
+    water_sensitivity: medium       # rye is drought-tolerant
+    temp_sensitivity: medium
+    harvest_timing_sensitivity: low
+    feature_interaction_order: low
+    phenology_family: winter_cereal
+
+  triticale:
+    season_length_days: 300
+    critical_windows: 2
+    yield_signal_window: narrow
+    water_sensitivity: medium
+    temp_sensitivity: medium
+    harvest_timing_sensitivity: low
+    feature_interaction_order: low
+    phenology_family: winter_cereal
+
+  # ── Winter oilseed ─────────────────────────────────────────────────────
+  winter_rapeseed:
+    season_length_days: 305
+    critical_windows: 3             # flowering + pod-fill + oil accumulation
+    yield_signal_window: medium
+    water_sensitivity: high
+    temp_sensitivity: high
+    harvest_timing_sensitivity: medium
+    feature_interaction_order: high  # oil × water × temp interactions
+    phenology_family: winter_oilseed
+
+  # ── Summer cereals ─────────────────────────────────────────────────────
+  summer_barley:
+    season_length_days: 140
+    critical_windows: 1
+    yield_signal_window: narrow     # short season = every day matters
+    water_sensitivity: high
+    temp_sensitivity: high
+    harvest_timing_sensitivity: low
+    feature_interaction_order: low
+    phenology_family: summer_cereal
+
+  oats:
+    season_length_days: 150
+    critical_windows: 1
+    yield_signal_window: narrow
+    water_sensitivity: high
+    temp_sensitivity: medium
+    harvest_timing_sensitivity: low
+    feature_interaction_order: low
+    phenology_family: summer_cereal
+
+  # ── Silage maize ───────────────────────────────────────────────────────
+  silage_maize:
+    season_length_days: 165
+    critical_windows: 2             # tasseling + grain-filling
+    yield_signal_window: broad      # biomass accumulates across whole season
+    water_sensitivity: high
+    temp_sensitivity: high          # heat accumulation drives growth
+    harvest_timing_sensitivity: medium
+    feature_interaction_order: medium
+    phenology_family: summer_crop
+
+  # ── Root crops ─────────────────────────────────────────────────────────
+  potatoes:
+    season_length_days: 175
+    critical_windows: 3             # emergence + tuber-init + bulking
+    yield_signal_window: broad
+    water_sensitivity: medium
+    temp_sensitivity: medium
+    harvest_timing_sensitivity: high  # autumn frost / rot risk
+    feature_interaction_order: high
+    phenology_family: root_crop
+
+  sugar_beet:
+    season_length_days: 200
+    critical_windows: 3             # emergence + canopy-close + root bulking
+    yield_signal_window: broad
+    water_sensitivity: medium
+    temp_sensitivity: low
+    harvest_timing_sensitivity: high
+    feature_interaction_order: high
+    phenology_family: root_crop
+
+# ═══════════════════════════════════════════════════════════════════════
+# Model taxonomy — inductive biases per architecture
+# ═══════════════════════════════════════════════════════════════════════
+models:
+  xgboost:
+    temporal_receptive_field: instantaneous   # no memory; features summarize history
+    feature_interaction: high_order           # tree splits combine features multiplicatively
+    long_horizon_capacity: low
+    narrow_window_capacity: high              # splits pinpoint threshold events
+    training_data_efficiency: high            # converges fast; less data hungry
+    architecture_family: tree
+
+  dlinear:
+    temporal_receptive_field: full            # linear projection over entire input
+    feature_interaction: linear
+    long_horizon_capacity: medium
+    narrow_window_capacity: low               # no non-linearity to isolate a window
+    training_data_efficiency: very_high
+    architecture_family: linear
+
+  lstm:
+    temporal_receptive_field: gated_recurrent # ~100s of days effective memory
+    feature_interaction: sequential
+    long_horizon_capacity: medium             # forgets very long horizons
+    narrow_window_capacity: high              # gates learn to focus on relevant windows
+    training_data_efficiency: medium
+    architecture_family: recurrent
+
+  patchtst:
+    temporal_receptive_field: patch_based     # local patches + global attention over patches
+    feature_interaction: linear_within_patch_attention_across
+    long_horizon_capacity: high
+    narrow_window_capacity: medium
+    training_data_efficiency: medium
+    architecture_family: patch_transformer
+
+  itransformer:
+    temporal_receptive_field: full_via_inverted_attention  # variables as tokens
+    feature_interaction: attention_across_variables         # cross-feature is the strength
+    long_horizon_capacity: high
+    narrow_window_capacity: medium
+    training_data_efficiency: medium
+    architecture_family: variable_transformer
+
+  tft:
+    temporal_receptive_field: full_encoder_decoder_attention
+    feature_interaction: variable_selection_plus_attention
+    long_horizon_capacity: very_high          # designed for long-horizon interpretability
+    narrow_window_capacity: low               # attention diffuses across full input
+    training_data_efficiency: low             # needs long training
+    architecture_family: temporal_fusion_transformer
+
+# ═══════════════════════════════════════════════════════════════════════
+# Compatibility hypothesis — for each crop, which model SHOULD win
+# and why (before looking at results). This is the falsifiable claim.
+# ═══════════════════════════════════════════════════════════════════════
+predicted_winners:
+  # Winter cereals: narrow window + sequential phenology → LSTM/iTransformer
+  winter_wheat:    { primary: lstm,         alternates: [itransformer], rationale: "Narrow anthesis-to-grain-fill window; LSTM gate learns to focus. Cross-feature interactions (water × temp) helped by iTransformer." }
+  winter_barley:   { primary: lstm,         alternates: [itransformer, patchtst], rationale: "Same phenology as wheat but shorter grain-fill; recurrent gates fit." }
+  rye:             { primary: lstm,         alternates: [dlinear],       rationale: "Drought-tolerant, simple phenology, weather-yield near-linear → LSTM or even DLinear works." }
+  triticale:       { primary: lstm,         alternates: [itransformer], rationale: "Wheat/rye hybrid; sequential winter-cereal phenology." }
+
+  # Winter oilseed: high feature-interaction order → iTransformer
+  winter_rapeseed: { primary: itransformer, alternates: [patchtst],      rationale: "Yield depends on cross-feature interactions (oil × water × temp × soil); iTransformer's cross-variable attention fits." }
+
+  # Summer cereals: short season, narrow window, direct weather-yield → XGBoost/LSTM
+  summer_barley:   { primary: itransformer, alternates: [lstm, xgboost], rationale: "Short season means feature interactions matter more than temporal depth; iTransformer wins." }
+  oats:            { primary: itransformer, alternates: [lstm, xgboost], rationale: "Same as summer barley — narrow window, cross-feature attention beats sequential." }
+
+  # Silage maize: broad growth window, biomass accumulates → TFT
+  silage_maize:    { primary: tft,          alternates: [xgboost, patchtst], rationale: "Broad biomass-accumulation window; TFT attention captures cumulative growth. But XGBoost/PatchTST are close." }
+
+  # Root crops: long season, multiple critical stages, high harvest sensitivity → TFT
+  potatoes:        { primary: tft,          alternates: [itransformer], rationale: "Multiple critical windows (emergence, tuber-init, bulking) + high harvest-timing sensitivity; TFT's long-horizon attention fits." }
+  sugar_beet:      { primary: tft,          alternates: [itransformer], rationale: "Longest season, multiple critical stages, harvest weather determines quality; TFT designed for exactly this." }

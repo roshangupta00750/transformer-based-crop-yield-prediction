@@ -1,0 +1,38 @@
+# Core
+numpy>=1.26
+pandas>=2.1
+scipy>=1.11
+scikit-learn>=1.4
+pyyaml>=6.0
+tqdm>=4.66
+
+# Deep learning (laptop-friendly: PyTorch + a couple of TS libraries)
+torch>=2.2
+pytorch-lightning>=2.2
+pytorch-forecasting>=1.0      # provides TFT, NHiTS, etc.
+einops>=0.7                   # used by PatchTST/iTransformer impls
+
+# Tree baseline
+xgboost>=2.0
+
+# Time-series convenience (optional - keep for Darts implementations)
+darts>=0.27
+
+# Geospatial / data acquisition
+wetterdienst>=0.79            # DWD weather (German Weather Service)
+earthengine-api>=0.1.395      # Sentinel-2 / MODIS via GEE
+geopandas>=0.14
+rasterio>=1.3
+xarray>=2024.1
+netcdf4>=1.6
+
+# Plotting & analysis
+matplotlib>=3.8
+seaborn>=0.13
+plotly>=5.18
+
+# Dev / testing
+pytest>=8.0
+black>=24.0
+ruff>=0.3
+jupyter>=1.0

@@ -1,0 +1,6 @@
+# DLinear sanity check (Zeng et al., AAAI 2023)
+name: dlinear
+moving_avg_kernel: 25
+individual: false        # one linear per channel (true) vs. shared (false)
+learning_rate: 0.005
+batch_size: 256

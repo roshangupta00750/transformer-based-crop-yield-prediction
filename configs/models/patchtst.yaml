@@ -1,0 +1,10 @@
+# PatchTST (Nie et al., ICLR 2023)
+name: patchtst
+patch_len: 16
+stride: 8
+d_model: 128
+n_heads: 8
+n_layers: 3
+dropout: 0.1
+learning_rate: 0.0005
+batch_size: 128

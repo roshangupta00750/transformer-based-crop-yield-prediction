@@ -1,0 +1,11 @@
+# Temporal Fusion Transformer (Lim et al., 2021)
+# Implementation: pytorch-forecasting.TemporalFusionTransformer
+name: tft
+hidden_size: 64
+attention_head_size: 4
+dropout: 0.1
+hidden_continuous_size: 32
+output_size: 3            # quantile outputs P10/P50/P90
+loss: "quantile"          # uses QuantileLoss
+learning_rate: 0.001
+batch_size: 128

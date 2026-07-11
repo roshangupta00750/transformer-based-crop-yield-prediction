@@ -1,0 +1,35 @@
+cff-version: 1.2.0
+message: "If you use this benchmark, taxonomy, or dataset, please cite it as below."
+title: "German Multi-Crop Yield Prediction Benchmark with Compatibility Taxonomy"
+authors:
+  - family-names: Gupta
+    given-names: Roshan
+    affiliation: "Julius-Maximilians-Universität Würzburg, Institut für Informatik"
+version: 0.1.0
+date-released: 2026-07-11
+license: MIT
+type: software
+repository-code: "https://github.com/<update-with-your-username>/crop_yield_benchmark"
+url: "https://github.com/<update-with-your-username>/crop_yield_benchmark"
+keywords:
+  - crop yield prediction
+  - crop-model compatibility taxonomy
+  - meta-learning
+  - transformer
+  - benchmark
+  - agriculture
+  - climate impact
+  - CMIP6
+  - Germany
+  - NUTS-3
+abstract: >
+  An open reproducible benchmark for multi-crop yield prediction spanning
+  ten crops × 401 German NUTS-3 districts × 21 years of harmonized DWD
+  weather, MODIS satellite, SoilGrids soil, and Destatis yield data
+  (2003–2023). Six deep-learning architectures (XGBoost, DLinear, LSTM,
+  PatchTST, iTransformer, TFT) are evaluated head-to-head with cross-model
+  fusion methods, and a first-principles crop-model compatibility taxonomy
+  predicts per-crop model choice from crop biology and model inductive
+  biases (top-1 hit rate 90%, Spearman ρ = 0.69). Climate stress test
+  under CMIP6 SSP scenarios (EC-Earth3-CC, MPI-ESM1-2-LR) via delta-method
+  counterfactuals.
