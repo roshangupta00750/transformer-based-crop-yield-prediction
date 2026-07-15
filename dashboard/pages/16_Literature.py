@@ -27,17 +27,30 @@ page_header("Literature comparison",
             "published EU / German crop-yield ML studies. Different "
             "studies use different data, splits, and metrics — treat these "
             "as directional comparisons, not strict head-to-heads.")
-st.caption("_How our best-per-crop R² sits against hand-curated published EU and German benchmarks — directional, apples-to-oranges, with caveats loud and up front._")
 
-st.warning(
-    "**Apples-to-oranges warning.** Each published paper here uses a "
-    "different region, feature set, year range, and validation split. "
-    "Some report R² on temporal splits (like ours), others on spatial "
-    "leave-one-out, others on within-year cross-validation. The numbers "
-    "shown are *best-effort literature ranges*, not exact replications. "
-    "Before the final report, replace the R² ranges below with values "
-    "verified against the actual PDFs."
+st.markdown(
+    "### TL;DR\n\n"
+    "Our best-per-crop R² lands within or above the published EU/German "
+    "literature range on most of the 10 crops, using a directional (not "
+    "strict) comparison."
 )
+
+with st.expander("More details & apples-to-oranges caveat", expanded=False):
+    st.caption(
+        "How our best-per-crop R² sits against hand-curated published "
+        "EU and German benchmarks — directional, apples-to-oranges, "
+        "with caveats loud and up front."
+    )
+    st.warning(
+        "**Apples-to-oranges warning.** Each published paper here uses "
+        "a different region, feature set, year range, and validation "
+        "split. Some report R² on temporal splits (like ours), others "
+        "on spatial leave-one-out, others on within-year cross-"
+        "validation. The numbers shown are *best-effort literature "
+        "ranges*, not exact replications. Before the final report, "
+        "replace the R² ranges below with values verified against the "
+        "actual PDFs."
+    )
 
 # --------------------------------------------------------------------------- #
 # Published benchmarks (hand-curated, EU/German focus)

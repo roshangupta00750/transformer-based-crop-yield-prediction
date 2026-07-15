@@ -51,3 +51,6 @@ Thumbs.db
 .env
 *.key
 gee-service-account.json
+cred.txt
+*.credentials
+*_token.txt

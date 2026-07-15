@@ -25,7 +25,20 @@ st.set_page_config(page_title="Leaderboard — Crop Yield Benchmark",
 page_header("Head-to-head Leaderboard",
             "Best R² per model, per-crop matrix with taxonomy overlay, "
             "family compatibility heatmap, and single-crop drilldown.")
-st.caption("_Six architectures across ten crops — best-per-model table, per-crop-by-model matrix with taxonomy [P]/[A] overlay, crop-family x model-family compatibility heatmap, and a single-crop drilldown; the canonical Chapter 4 landing._")
+
+st.markdown(
+    "### TL;DR\n\n"
+    "Across six architectures and ten crops, the taxonomy's PRIMARY pick "
+    "lands as the top-1 winner in 9 of 10 crops on the 2022-2023 test split."
+)
+
+with st.expander("More details", expanded=False):
+    st.caption(
+        "Six architectures across ten crops — best-per-model table, "
+        "per-crop-by-model matrix with taxonomy [P]/[A] overlay, "
+        "crop-family x model-family compatibility heatmap, and a "
+        "single-crop drilldown; the canonical Chapter 4 landing."
+    )
 
 metrics = load_all_metrics()
 tax = load_taxonomy()

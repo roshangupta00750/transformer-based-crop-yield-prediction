@@ -12,13 +12,17 @@ conda activate agri
 ./dashboard/run.sh
 ```
 
-Or invoke streamlit manually (the same env vars are also set at the top of
-`Home.py` and `utils.py`, so this still works):
+Or invoke streamlit manually. Prefer the grouped-sidebar entrypoint —
+it collapses the 19 pages into 7 named sections:
 
 ```bash
 conda activate agri
-streamlit run dashboard/Home.py
+streamlit run dashboard/nav.py
 ```
+
+`streamlit run dashboard/Home.py` also works but shows the auto-discovered
+flat 19-entry sidebar (same env vars are set at the top of `Home.py`,
+`nav.py`, and `utils.py`, so any entrypoint is safe on macOS Intel).
 
 The default URL is <http://localhost:8501>.
 

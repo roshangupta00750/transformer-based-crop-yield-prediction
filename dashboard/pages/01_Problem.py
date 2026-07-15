@@ -20,9 +20,16 @@ st.set_page_config(page_title="Why This Benchmark — Crop Yield Benchmark",
 page_header("Why This Benchmark",
             "The architecture-selection gap in crop-yield ML — and how a "
             "first-principles taxonomy closes it.")
-st.caption("_Crop-yield ML has a dozen candidate architectures and no principled way to pick among them — this page frames the selection gap and the testable-hypothesis approach the rest of the dashboard defends._")
 
-st.markdown("""
+st.markdown(
+    "### TL;DR\n\n"
+    "Crop-yield ML has a dozen candidate architectures and no principled "
+    "way to pick among them — this benchmark closes that gap with a "
+    "first-principles taxonomy that hits top-1 on 9 of 10 crops."
+)
+
+with st.expander("More details", expanded=False):
+    st.markdown("""
 Crop-yield forecasting steers food-security policy, farmer decisions, and
 climate-adaptation planning — yet the ML literature offers a dozen candidate
 architectures (gradient-boosted trees, LSTMs, patch-based Transformers,

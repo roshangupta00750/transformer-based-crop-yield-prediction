@@ -28,16 +28,29 @@ page_header("Crop-Model Compatibility Taxonomy",
             "A priori claim: for each crop, which model architecture should "
             "win — based on crop biology and model inductive biases. "
             "Empirically validated against the benchmark.")
-st.caption("_The paper's headline contribution — a first-principles taxonomy that predicts which architecture wins which crop from crop biology and model inductive bias, hitting top-1 on 9 of 10 crops and top-3 on all 10._")
 
-st.info(
-    "**How this differs from typical ML benchmark studies.** Most benchmarks "
-    "report *which model won each crop* — descriptive. This taxonomy makes a "
-    "*testable prediction from first principles* (crop phenology × model "
-    "inductive bias) and then validates it against the benchmark. That "
-    "reframes the empirical study from *engineering exercise* to "
-    "*taxonomic hypothesis test.*"
+st.markdown(
+    "### TL;DR\n\n"
+    "A first-principles crop-model taxonomy correctly picks the winning "
+    "model on 9 of 10 crops (top-3 on all 10) with mean Spearman ρ = 0.69 "
+    "— the benchmark is a hypothesis test, not a leaderboard."
 )
+
+with st.expander("More details", expanded=False):
+    st.caption(
+        "The paper's headline contribution — a first-principles taxonomy "
+        "that predicts which architecture wins which crop from crop biology "
+        "and model inductive bias, hitting top-1 on 9 of 10 crops and "
+        "top-3 on all 10."
+    )
+    st.info(
+        "**How this differs from typical ML benchmark studies.** Most "
+        "benchmarks report *which model won each crop* — descriptive. This "
+        "taxonomy makes a *testable prediction from first principles* "
+        "(crop phenology × model inductive bias) and then validates it "
+        "against the benchmark. That reframes the empirical study from "
+        "*engineering exercise* to *taxonomic hypothesis test.*"
+    )
 
 # --------------------------------------------------------------------------- #
 # Load
@@ -126,7 +139,7 @@ st.dataframe(styled, hide_index=True, width="stretch")
 divider("Why the taxonomy expects each winner")
 
 for _, row in val.iterrows():
-    hit_emoji = "✓" if row["hit_at_1"] else ("△" if row["hit_at_3"] else "✗")
+    hit_emoji = "hit" if row["hit_at_1"] else ("top-3" if row["hit_at_3"] else "miss")
     with st.expander(f"{hit_emoji}  {row['crop']} — predicted "
                      f"{row['predicted_primary']}, observed "
                      f"{row['observed_best_model']} (R² {row['observed_best_r2']:.3f})"):
