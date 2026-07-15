@@ -27,6 +27,7 @@ page_header("Literature comparison",
             "published EU / German crop-yield ML studies. Different "
             "studies use different data, splits, and metrics — treat these "
             "as directional comparisons, not strict head-to-heads.")
+st.caption("_How our best-per-crop R² sits against hand-curated published EU and German benchmarks — directional, apples-to-oranges, with caveats loud and up front._")
 
 st.warning(
     "**Apples-to-oranges warning.** Each published paper here uses a "

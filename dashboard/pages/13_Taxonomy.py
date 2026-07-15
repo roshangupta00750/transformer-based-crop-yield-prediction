@@ -28,6 +28,7 @@ page_header("Crop-Model Compatibility Taxonomy",
             "A priori claim: for each crop, which model architecture should "
             "win — based on crop biology and model inductive biases. "
             "Empirically validated against the benchmark.")
+st.caption("_The paper's headline contribution — a first-principles taxonomy that predicts which architecture wins which crop from crop biology and model inductive bias, hitting top-1 on 9 of 10 crops and top-3 on all 10._")
 
 st.info(
     "**How this differs from typical ML benchmark studies.** Most benchmarks "

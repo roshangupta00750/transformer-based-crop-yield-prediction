@@ -35,6 +35,7 @@ page_header("Cross-model fusion (5 vs 6 models)",
             "How does the fusion leaderboard change when a specialist model "
             "with uneven per-crop quality enters the pool? Compares 5-model "
             "(no TFT) vs 6-model (TFT included) fusion side-by-side.")
+st.caption("_Does the taxonomy's winner still lead once ensembles enter the arena? — six fusion methods on 5-model versus 6-model pools with per-crop taxonomy overlay._")
 
 # Prefer new dual output; fall back to legacy single file for backward compat.
 sum_5 = METRICS_DIR / "fusion_summary_5models.csv"
@@ -60,6 +61,20 @@ coef_path = METRICS_DIR / "fusion_coefficients_6models.csv"
 if not coef_path.exists():
     coef_path = METRICS_DIR / "fusion_coefficients.csv"
 coef = pd.read_csv(coef_path) if coef_path.exists() else pd.DataFrame()
+
+
+# Hoisted so it's available for every table on the page (called from
+# multiple locations below, including line ≈215 in the per-crop showdown).
+def _highlight_lift(val):
+    if pd.isna(val):
+        return ""
+    if val > 0.03:
+        return "background-color: #d4edda; color: #155724"
+    if val > 0:
+        return "background-color: #fff3cd; color: #856404"
+    if val == 0:
+        return "background-color: #e2e3e5; color: #383d41"
+    return "background-color: #f8d7da; color: #721c24"
 
 # --------------------------------------------------------------------------- #
 # Method-level leaderboard (mean across crops)
@@ -287,16 +302,6 @@ method_rows = summary[summary["method"] == sel_method][
     ["crop", "r2", "rmse"]].merge(baseline_per_crop, on="crop")
 method_rows["lift"] = method_rows["r2"] - method_rows["baseline_r2"]
 method_rows = method_rows.sort_values("lift", ascending=False)
-
-
-def _highlight_lift(val: float):
-    if pd.isna(val):
-        return ""
-    if val > 0.03:
-        return "background-color: #d4edda; color: #155724"
-    if val > 0:
-        return "background-color: #fff3cd; color: #856404"
-    return "background-color: #f8d7da; color: #721c24"
 
 
 st.dataframe(

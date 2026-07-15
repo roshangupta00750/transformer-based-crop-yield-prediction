@@ -17,6 +17,7 @@ st.set_page_config(page_title="Data — Crop Yield Benchmark",
 
 page_header("Data sources & previews",
             "Origin, license, and a live row preview for each modality.")
+st.caption("_Every downstream claim rests on one unified dataset — ten German crops across 401 NUTS-3 districts over 21 years (2003-2023) — assembled here from weather, satellite, soil, and yield sources with full provenance._")
 
 # --------------------------------------------------------------------------- #
 # Provenance table

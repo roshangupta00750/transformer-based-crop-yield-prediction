@@ -23,6 +23,7 @@ st.set_page_config(page_title="In-Season Horizons — Crop Yield",
 page_header("In-season horizon analysis",
             "How model accuracy degrades the further before harvest you ask "
             "for a prediction. The PPT's headline research question.")
+st.caption("_How each model's R² degrades the further before harvest the prediction is made — the horizon dimension the leaderboard collapses into a single number._")
 
 # --------------------------------------------------------------------------- #
 # Load

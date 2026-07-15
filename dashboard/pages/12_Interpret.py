@@ -29,6 +29,7 @@ st.set_page_config(page_title="Interpretability — Crop Yield",
 page_header("Interpretability",
             "Which features did the models actually use? TFT's variable-"
             "selection network vs. XGBoost's gain-based importance.")
+st.caption("_What each model actually attended to — TFT variable selection, PatchTST patch attention, iTransformer variate attention, and XGBoost gain — the interpretability half of the accuracy-vs-interpretability trade-off._")
 
 crops = sorted(load_unified()["crop"].unique().tolist()) \
     if not load_unified().empty else ["winter_wheat"]

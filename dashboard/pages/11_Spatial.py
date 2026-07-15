@@ -36,6 +36,7 @@ st.set_page_config(page_title="Spatial — Crop Yield",
 page_header("Spatial holdout analysis",
             "Per-district model performance + leave-one-Landkreis-out "
             "methodology anchor.")
+st.caption("_Per-district R² on a NUTS-3 choropleth for all six models plus a true leave-one-Landkreis-out XGBoost anchor — the spatial-generalization dimension the leaderboard collapses._")
 
 # --------------------------------------------------------------------------- #
 # Load

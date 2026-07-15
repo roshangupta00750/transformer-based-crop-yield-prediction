@@ -20,6 +20,7 @@ from utils import (CHECKPOINTS_DIR, MODELS, PROJECT_ROOT, divider,
 st.set_page_config(page_title="Geographic — Crop Yield", layout="wide")
 page_header("Geographic view",
             "Yield and model predictions across the ~400 German Landkreise.")
+st.caption("_Drill into any trained model's per-district actuals, predictions, and residuals on the German NUTS-3 choropleth, with top/bottom tables and a per-district time series._")
 
 # --------------------------------------------------------------------------- #
 # Load polygons

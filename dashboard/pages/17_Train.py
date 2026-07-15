@@ -22,6 +22,7 @@ page_header("Train models",
             "Tries the GPU box via SSH first; falls back to local CPU when "
             "the box is unreachable or the model is on the GPU blocklist "
             "(currently TFT, which OOMs the lab box during pf init).")
+st.caption("_Launch a training run from the browser — routed to the GPU box when reachable, falling back to local CPU for TFT — and tail the running job's log inline._")
 
 # --------------------------------------------------------------------------- #
 # Device probe

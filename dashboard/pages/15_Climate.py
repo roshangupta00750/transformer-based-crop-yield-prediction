@@ -28,6 +28,7 @@ page_header("Climate counterfactual (CMIP6 SSP2-4.5 / SSP5-8.5)",
             "Delta-method: apply (SSP future window - historical baseline) "
             "climate deltas to 2022-23 observed features, predict with the "
             "existing daily-trained models.")
+st.caption("_Do models agree under CMIP6 SSP2-4.5 and SSP5-8.5 warming? — a two-model ensemble stress test where cross-model disagreement becomes a free OOD-uncertainty signal._")
 
 st.info(
     "**Two-model CMIP6 ensemble caveat.** We use a 2-model ensemble "

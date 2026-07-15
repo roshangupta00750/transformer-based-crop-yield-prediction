@@ -1,4 +1,4 @@
-"""Home page — project overview and model leaderboard.
+"""Home page — story-arc landing for the crop-yield benchmark.
 
 Streamlit looks for a top-level script (this file) as the landing page. All
 other pages live in ``pages/`` and appear in the sidebar in numeric order.
@@ -14,13 +14,10 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
-import plotly.express as px
 import streamlit as st
 
-from utils import (MODEL_INFO, MODELS, divider, kpi, load_all_metrics,
-                   load_multicrop_summary, load_taxonomy,
-                   load_taxonomy_validation, load_unified, page_header,
-                   taxonomy_verdict)
+from utils import (divider, kpi, load_all_metrics, load_taxonomy_validation,
+                   load_unified)
 
 st.set_page_config(
     page_title="Crop Yield Benchmark — JMU Würzburg",
@@ -36,8 +33,10 @@ st.markdown(
     "**Praktikum — Julius-Maximilians-Universität Würzburg · Institut für Informatik**"
 )
 st.caption(
-    "Head-to-head benchmark of six model families on per-Landkreis "
-    "(NUTS-3) German crop yield, 2003–2023."
+    "A first-principles Crop-Model Compatibility Taxonomy that picks the "
+    "right model for each of ten German crops — validated on a "
+    "six-architecture, 401-district, 21-year benchmark and stress-tested "
+    "three ways."
 )
 
 # --------------------------------------------------------------------------- #
@@ -45,8 +44,6 @@ st.caption(
 # --------------------------------------------------------------------------- #
 df = load_unified()
 metrics = load_all_metrics()
-
-tax = load_taxonomy()
 tax_val = load_taxonomy_validation()
 
 c1, c2, c3, c4, c5, c6 = st.columns(6)
@@ -77,184 +74,115 @@ with c6:
 st.markdown("---")
 
 # --------------------------------------------------------------------------- #
-# Leaderboard
+# Story arc navigator — seven chapters
 # --------------------------------------------------------------------------- #
-page_header("Model leaderboard",
-            "Best R² per model on the 2022–2023 temporal test split.")
+STORY_ARC = [
+    {
+        "num": 1,
+        "title": "Why This Benchmark",
+        "intro": (
+            "Crop-yield forecasting steers food-security policy, farmer "
+            "decisions, and climate-adaptation planning — yet the ML "
+            "literature offers a dozen candidate architectures with no "
+            "principled way to pick among them. This chapter frames the "
+            "gap the benchmark closes: matching model to crop from first "
+            "principles rather than shopping the leaderboard after the fact."
+        ),
+        "pages": ["Why This Benchmark"],
+    },
+    {
+        "num": 2,
+        "title": "The Data",
+        "intro": (
+            "Every claim downstream rests on one unified dataset — 10 "
+            "German crops, 401 NUTS-3 districts, and 21 years (2003-2023) — "
+            "assembled from weather, satellite, soil, and yield sources. "
+            "This chapter documents provenance, licensing, and coverage, "
+            "and lets you preview each modality live before any model "
+            "touches it."
+        ),
+        "pages": ["The Data"],
+    },
+    {
+        "num": 3,
+        "title": "Six Architectures",
+        "intro": (
+            "Six model families sit head-to-head: XGBoost, DLinear, LSTM, "
+            "PatchTST, iTransformer, and the Temporal Fusion Transformer. "
+            "Each page opens the box on hyperparameters, in-season horizon "
+            "curves, predicted-vs-actual scatter, residual diagnostics — "
+            "and, for TFT alone, quantile calibration on the P10-P90 band."
+        ),
+        "pages": ["XGBoost", "DLinear", "LSTM", "PatchTST", "iTransformer", "TFT"],
+    },
+    {
+        "num": 4,
+        "title": "Empirical Results",
+        "intro": (
+            "No single architecture wins every crop — the best-per-model "
+            "leaderboard, per-crop matrix, in-season decay curves, spatial "
+            "holdout maps, and attention-based interpretability comparisons "
+            "all say so. This chapter is the empirical bedrock the taxonomy "
+            "will have to explain."
+        ),
+        "pages": ["Head-to-head Leaderboard", "In-season Horizon",
+                  "Spatial Holdout", "Interpretability"],
+    },
+    {
+        "num": 5,
+        "title": "The Taxonomy",
+        "intro": (
+            "The paper's headline contribution: a first-principles "
+            "Crop-Model Compatibility Taxonomy that predicts each crop's "
+            "winning architecture from crop biology and model inductive "
+            "bias — a testable hypothesis, not a post-hoc rationalization. "
+            "It hits top-1 on 9 of 10 crops and top-3 on all 10."
+        ),
+        "pages": ["Crop-Model Taxonomy"],
+    },
+    {
+        "num": 6,
+        "title": "Stress Tests",
+        "intro": (
+            "If the taxonomy story is real it should survive three "
+            "independent stress tests — cross-model fusion (does the "
+            "taxonomy's winner still lead once ensembles enter the arena?), "
+            "CMIP6 climate counterfactuals (do models agree under OOD "
+            "warming?), and comparison against published EU crop-yield "
+            "benchmarks. Each section carries its own caveats banner so "
+            "the reader sees where the evidence is directional versus "
+            "conclusive."
+        ),
+        "pages": ["Cross-model Fusion", "Climate Counterfactual",
+                  "Literature Comparison"],
+    },
+    {
+        "num": 7,
+        "title": "Reproduce",
+        "intro": (
+            "Everything above is open-source and re-runnable — this "
+            "chapter is the entry point. Launch training runs from the "
+            "browser (routed to the GPU box when reachable, falling back "
+            "to local CPU for TFT), then drill into any trained model's "
+            "per-district predictions on the German NUTS-3 choropleth."
+        ),
+        "pages": ["Train Models", "Geographic Predictions"],
+    },
+]
 
-if metrics.empty:
-    st.warning(
-        "No trained models found yet. Run a model from the **Train** page, "
-        "or from the CLI: `python scripts/03_train.py --model <name>`."
-    )
-else:
-    by_model = (metrics.sort_values("r2", ascending=False)
-                       .groupby("model", as_index=False)
-                       .first()
-                       .sort_values("r2", ascending=False))
-    by_model["best_horizon"] = by_model["horizon"]
-    by_model["family"] = by_model["model"].map(
-        lambda m: MODEL_INFO.get(m.replace("_abs", ""), {}).get("kind", "—"))
-    by_model["reference"] = by_model["model"].map(
-        lambda m: MODEL_INFO.get(m.replace("_abs", ""), {}).get("ref", "—"))
-    show = by_model[["model", "family", "best_horizon", "r2", "rmse", "mae",
-                     "mape", "reference"]].rename(columns={
-        "model": "Model", "family": "Family", "best_horizon": "Best @",
-        "r2": "R²", "rmse": "RMSE (dt/ha)", "mae": "MAE",
-        "mape": "MAPE (%)", "reference": "Reference",
-    })
-    st.dataframe(
-        show.style.format({"R²": "{:.3f}", "RMSE (dt/ha)": "{:.2f}",
-                           "MAE": "{:.2f}", "MAPE (%)": "{:.2f}"})
-                  .background_gradient(subset=["R²"], cmap="RdYlGn"),
-        width="stretch", hide_index=True,
-    )
+divider("The story in seven chapters")
+st.caption(
+    "The dashboard is ordered like a research paper — motivation, data, "
+    "methods, results, headline claim, robustness, reproducibility. Read "
+    "top-to-bottom for the full argument, or jump to any chapter below."
+)
 
-    # Quick visual: R² per model per horizon
-    divider("R² across in-season horizons")
-    metrics_main = metrics[~metrics["model"].str.contains("_abs")]
-    fig = px.line(
-        metrics_main.sort_values("h_days"),
-        x="h_days", y="r2", color="model", markers=True,
-        labels={"h_days": "Days pre-harvest", "r2": "R²", "model": "Model"},
-        title="R² vs. in-season horizon — winter wheat, 2022–2023 test",
-    )
-    fig.add_hline(y=0.64, line_dash="dash", line_color="grey",
-                  annotation_text="per-district mean baseline (0.64)",
-                  annotation_position="bottom right")
-    fig.update_layout(height=440, hovermode="x unified")
-    st.plotly_chart(fig, width="stretch")
-
-# --------------------------------------------------------------------------- #
-# Per-crop leaderboard (multi-crop benchmark)
-# --------------------------------------------------------------------------- #
-mc = load_multicrop_summary()
-if not mc.empty:
-    divider("Per-crop leaderboard with taxonomy overlay")
-    st.caption(
-        "R² per (model, crop) on the 2022–2023 test split. Each cell tagged "
-        "with **[P]** if the taxonomy predicted this model as PRIMARY for "
-        "this crop, **[A]** if alternate. If the observed best model (green "
-        "text) matches taxonomy [P] — that's a top-1 hit."
-    )
-
-    # ---- Matrix view: crops × models with R² gradient ----
-    model_order = (mc.groupby("model")["r2"].mean()
-                     .sort_values(ascending=False).index.tolist())
-    crop_order = (mc.groupby("crop")["r2"].mean()
-                    .sort_values(ascending=False).index.tolist())
-    pivot = (mc.pivot(index="crop", columns="model", values="r2")
-               .reindex(index=crop_order, columns=model_order)
-               .round(3))
-    pivot["mean_across_models"] = pivot.mean(axis=1).round(3)
-
-    # Build a parallel matrix of "P"/"A"/"" markers per (crop, model)
-    verdict_pivot = pd.DataFrame(
-        index=pivot.index, columns=[c for c in pivot.columns if c != "mean_across_models"]
-    )
-    for crop in verdict_pivot.index:
-        for model in verdict_pivot.columns:
-            v = taxonomy_verdict(crop, model, tax)
-            verdict_pivot.at[crop, model] = "P" if v == "primary" else ("A" if v == "alternate" else "")
-
-    def _fmt_cell(x):
-        return f"{x:.3f}" if pd.notna(x) else "—"
-
-    # Compose a display frame: R² formatted + optional [P]/[A] suffix
-    disp = pivot.copy()
-    for crop in pivot.index:
-        for model in verdict_pivot.columns:
-            r2v = pivot.at[crop, model]
-            tag = verdict_pivot.at[crop, model]
-            if pd.notna(r2v):
-                if tag == "P":
-                    disp.at[crop, model] = f"{r2v:.3f} [P]"
-                elif tag == "A":
-                    disp.at[crop, model] = f"{r2v:.3f} [A]"
-                else:
-                    disp.at[crop, model] = f"{r2v:.3f}"
-    disp["mean_across_models"] = pivot["mean_across_models"].map(_fmt_cell)
-
-    st.dataframe(disp, width="stretch")
-
-    # Companion: pure-numeric view with R² gradient (for scanning by color)
-    st.markdown("##### Same data, colored by R² (no tags — easier to scan)")
-    st.dataframe(
-        pivot.style.format("{:.3f}", na_rep="—")
-                   .background_gradient(cmap="RdYlGn", vmin=-0.2, vmax=0.7,
-                                        subset=model_order),
-        width="stretch",
-    )
-
-    # ---- New: Compatibility heatmap by family ----
-    if tax:
-        divider("Compatibility heatmap — crop-phenology family × model architecture family")
-        st.caption(
-            "Aggregates our per-(crop, model) R² by crop phenology family "
-            "(winter cereal, root crop, …) and model architecture family "
-            "(tree, transformer, recurrent, …). The clusters that light up "
-            "green are the theoretically predicted compatibilities — this "
-            "visualizes the taxonomy's core claim in one shot."
-        )
-        crop_fam = {c: v.get("phenology_family", "unknown")
-                    for c, v in tax.get("crops", {}).items()}
-        model_fam = {m: v.get("architecture_family", "unknown")
-                     for m, v in tax.get("models", {}).items()}
-        mc2 = mc.copy()
-        mc2["crop_family"] = mc2["crop"].map(crop_fam)
-        mc2["model_family"] = mc2["model"].map(model_fam)
-        fam_pivot = (mc2.groupby(["crop_family", "model_family"])["r2"]
-                       .mean().unstack())
-        fig = px.imshow(
-            fam_pivot, color_continuous_scale="RdYlGn",
-            color_continuous_midpoint=0, aspect="auto", text_auto=".3f",
-            labels=dict(x="Model architecture family",
-                        y="Crop phenology family", color="Mean R²"),
-            title="Mean test R² per (crop family × model family)",
-        )
-        fig.update_layout(height=420)
-        st.plotly_chart(fig, width="stretch")
-
-    # ---- Single-crop drilldown: pick a crop, rank models ----
-    st.markdown("##### Pick a crop to see the model ranking")
-    sel_crop = st.selectbox(
-        "Crop", crop_order,
-        index=crop_order.index("winter_wheat") if "winter_wheat" in crop_order else 0,
-    )
-
-    # Taxonomy prediction banner for this crop
-    if tax:
-        pred = tax.get("predicted_winners", {}).get(sel_crop, {})
-        if pred:
-            primary = pred.get("primary", "?")
-            alts = pred.get("alternates", []) or []
-            rationale = pred.get("rationale", "")
-            st.info(
-                f"**Taxonomy prediction for {sel_crop}:** "
-                f"primary → `{primary}`, alternates → "
-                f"{', '.join('`' + a + '`' for a in alts) if alts else '—'}. "
-                f"\n\n{rationale}"
-            )
-
-    cw = (mc[mc["crop"] == sel_crop]
-          .sort_values("r2", ascending=False)
-          .reset_index(drop=True))
-    cw["rank"] = cw.index + 1
-    cw["family"] = cw["model"].map(
-        lambda m: MODEL_INFO.get(m, {}).get("kind", "—"))
-    cw["taxonomy"] = cw["model"].map(
-        lambda m: {"primary": "PRIMARY", "alternate": "alt", "": "—"}[
-            taxonomy_verdict(sel_crop, m, tax)])
-    show = cw[["rank", "model", "family", "taxonomy", "r2", "rmse", "mae", "n"]].rename(
-        columns={"rank": "Rank", "model": "Model", "family": "Family",
-                 "taxonomy": "Taxonomy pick",
-                 "r2": "R²", "rmse": "RMSE (dt/ha)", "mae": "MAE", "n": "n"})
-    st.dataframe(
-        show.style.format({"R²": "{:.3f}", "RMSE (dt/ha)": "{:.2f}",
-                           "MAE": "{:.2f}"})
-                   .background_gradient(subset=["R²"], cmap="RdYlGn"),
-        width="stretch", hide_index=True,
-    )
+for chap in STORY_ARC:
+    divider(f"Chapter {chap['num']} — {chap['title']}")
+    st.markdown(chap["intro"])
+    st.markdown("**Pages in this chapter:**")
+    for pg in chap["pages"]:
+        st.markdown(f"- {pg}")
 
 # --------------------------------------------------------------------------- #
 # Project context
@@ -267,15 +195,6 @@ This dashboard wraps the reproducible benchmark described in
 > *On a single standardized German crop-yield dataset, which transformer
 > family delivers the best accuracy–interpretability trade-off for
 > **in-season** prediction (30 / 60 / 90 / 120 days before harvest)?*
-
-**Pages**
-
-| Page | Purpose |
-|---|---|
-| **Data** | Source provenance for weather, satellite, soil, yield, geography; live previews. |
-| **Train** | Launch any of the six training scripts in the background; tail logs live. |
-| **Models** (XGBoost / LSTM / DLinear / PatchTST / iTransformer / TFT) | One page per model — config, predictions vs. truth, residuals, feature lists. |
-| **Geographic** | Choropleth map of yield / predictions across the ~400 German Landkreise. |
 
 **Why anomaly framing?** 97 % of yield variance is between-district. Models
 predict the (district, year) **anomaly** rather than the absolute yield, so
