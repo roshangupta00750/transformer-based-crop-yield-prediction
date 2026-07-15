@@ -28,27 +28,32 @@ page_header("Climate counterfactual (CMIP6 SSP2-4.5 / SSP5-8.5)",
             "Delta-method: apply (SSP future window - historical baseline) "
             "climate deltas to 2022-23 observed features, predict with the "
             "existing daily-trained models.")
-st.caption("_Do models agree under CMIP6 SSP2-4.5 and SSP5-8.5 warming? — a two-model ensemble stress test where cross-model disagreement becomes a free OOD-uncertainty signal._")
+st.caption("_Do models agree under CMIP6 SSP2-4.5 and SSP5-8.5 warming? — a three-model ensemble stress test where cross-model disagreement becomes a free OOD-uncertainty signal._")
 
 st.info(
-    "**Two-model CMIP6 ensemble caveat.** We use a 2-model ensemble "
-    "(EC-Earth3-CC r1i1p1f1 + MPI-ESM1-2-LR r1i1p1f1). Ensemble-mean "
-    "growing-season tasmax delta under SSP5-8.5 is +0.20 °C, weaker than "
-    "the IPCC AR6 multi-model multi-realization mean (~+1.5-2 °C). The "
-    "methodology (delta-method on trained models) is ensemble-agnostic — "
-    "additional models/realizations plug in via `scripts/09_cmip6_pull.py "
-    "--model <name>` without pipeline changes; multi-realization analysis "
-    "is left for future work."
+    "**Three-model CMIP6 ensemble caveat.** We use a 3-model ensemble "
+    "(EC-Earth3-CC + MPI-ESM1-2-LR + MRI-ESM2-0, all r1i1p1f1). "
+    "Ensemble-mean growing-season tasmax delta under SSP5-8.5 is "
+    "**+0.58 °C** (SSP2-4.5: +0.79 °C), stronger than the previous 2-model "
+    "ensemble (+0.20 °C) after MRI-ESM2-0 pulled the mean toward its "
+    "individual +1.8 °C signal. Still below the IPCC AR6 multi-model "
+    "multi-realization mean (~+1.5-2 °C by 2050); multi-realization "
+    "analysis is left for future work. Note that MRI-ESM2-0 is the only "
+    "member showing the expected SSP5-8.5 > SSP2-4.5 warming ordering "
+    "for Germany in this window — the ensemble mean is dragged flatter "
+    "by internal variability in the other two single-realization runs."
 )
 st.info(
-    "**Model responsiveness to climate perturbation is itself the finding.** "
-    "PatchTST (+0.64%) and iTransformer (+0.51%) show the strongest yield "
-    "response under SSP5-8.5. XGBoost (+0.02%) and TFT (0.00%) are near-"
-    "insensitive — tree ensembles have discrete splits that damp small "
-    "input perturbations, and TFT's variable-selection head filters them "
-    "out. **Cross-model disagreement itself becomes a free out-of-"
-    "distribution uncertainty signal** without needing explicit Bayesian "
-    "machinery."
+    "**Cross-model disagreement itself IS the finding.** Under SSP5-8.5 "
+    "climate perturbation, LSTM (+0.60%) and iTransformer (+0.28%) show "
+    "the largest yield lift; PatchTST (+0.06%), XGBoost (-0.02%), and "
+    "TFT (0.00%) are near-insensitive; DLinear (-0.43%) has the largest "
+    "response but in the opposite direction — linear projection "
+    "extrapolates deleteriously under out-of-distribution weather. The "
+    "spread from -0.43% to +0.60% is a **free out-of-distribution "
+    "uncertainty signal** — no explicit Bayesian machinery required. "
+    "Tree splits and TFT's variable-selection head both damp small input "
+    "perturbations; recurrent gating (LSTM) preserves them best."
 )
 
 summary_path = METRICS_DIR / "counterfactual_daily_summary.csv"
@@ -231,11 +236,12 @@ if not district.empty:
 # --------------------------------------------------------------------------- #
 st.markdown("---")
 st.caption(
-    "**Methodology:** CMIP6 2-model ensemble (EC-Earth3-CC r1i1p1f1 + "
-    "MPI-ESM1-2-LR r1i1p1f1), monthly output. Historical baseline 2003-"
-    "2014, future window 2046-2050. Delta method: ensemble-mean monthly "
-    "deltas applied to daily 2022-23 features (additive for tasmax/tasmin, "
-    "multiplicative for pr/rsds — the latter sidesteps the DWD J/cm²/day "
-    "vs CMIP6 W/m² unit mismatch). Regenerate: `python scripts/"
+    "**Methodology:** CMIP6 3-model ensemble (EC-Earth3-CC + MPI-ESM1-2-LR "
+    "+ MRI-ESM2-0, all r1i1p1f1), monthly output. Historical baseline "
+    "2003-2014, future window 2046-2050. Delta method: ensemble-mean "
+    "monthly deltas applied to daily 2022-23 features (additive for "
+    "tasmax/tasmin, multiplicative for pr/rsds — the latter sidesteps "
+    "the DWD J/cm²/day vs CMIP6 W/m² unit mismatch). Regenerate: "
+    "`python scripts/09_cmip6_pull.py --model <name> && python scripts/"
     "10_cmip6_process.py && python scripts/13_counterfactual_daily.py`."
 )
