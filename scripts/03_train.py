@@ -42,7 +42,16 @@ CANDIDATE_PAST = [
     "ndvi", "evi", "lai", "ndwi",
 ]
 CANDIDATE_FUTURE = ["sin_doy", "cos_doy"]
-CANDIDATE_STATIC = ["sand", "clay", "soc", "ph", "bulk_density", "landkreis_id"]
+CANDIDATE_STATIC = [
+    # soil (original)
+    "sand", "clay", "soc", "ph", "bulk_density", "landkreis_id",
+    # DEM (COP-DEM GLO-90 → EPSG:3035 → zonal stats)
+    "elevation_mean", "elevation_std", "elevation_min", "elevation_max",
+    "slope_mean", "slope_std", "aspect_cos_mean", "aspect_sin_mean",
+    # phenology proxy (scipy double-logistic fit on backfilled NDVI, per year)
+    "sos_doy", "eos_doy", "los_days", "peak_doy",
+    "peak_ndvi", "amplitude_ndvi", "auc_growing",
+]
 
 
 def main() -> None:
@@ -91,9 +100,13 @@ def main() -> None:
     log.info("Split sizes: train=%d, val=%d, test=%d",
              len(df_train), len(df_val), len(split.test))
 
+    # Per-model static override (lstm.yaml sets this to just the 6 soil statics;
+    # broadcasting all 21 to every timestep diluted its temporal signal — LSTM
+    # regressed 0.208 vs samal-era. Other models use the full CANDIDATE_STATIC.)
+    static_pool = model_cfg.get("static_features", CANDIDATE_STATIC)
     spec = FeatureSpec(
         past_observed=[c for c in CANDIDATE_PAST if c in df.columns],
-        static=[c for c in CANDIDATE_STATIC if c in df.columns],
+        static=[c for c in static_pool if c in df.columns],
         known_future=[c for c in CANDIDATE_FUTURE if c in df.columns],
     )
     log.info("Features: past=%s, static=%s, future=%s",
@@ -134,11 +147,14 @@ def main() -> None:
              len(train_loader.dataset), len(val_loader.dataset))
 
     model = build_model(args.model, model_cfg)
+    # Per-model budget overrides (model_cfg wins, else experiment.yaml default)
+    _budget = exp_cfg["budget"]
     trainer = Trainer(
         model=model, device=device,
-        max_epochs=exp_cfg["budget"]["max_epochs"],
-        early_stopping_patience=exp_cfg["budget"]["early_stopping_patience"],
-        max_minutes=exp_cfg["budget"]["max_minutes"],
+        max_epochs=model_cfg.get("max_epochs", _budget["max_epochs"]),
+        early_stopping_patience=model_cfg.get(
+            "early_stopping_patience", _budget["early_stopping_patience"]),
+        max_minutes=model_cfg.get("max_minutes", _budget["max_minutes"]),
     )
     result = trainer.fit(train_loader, val_loader)
 

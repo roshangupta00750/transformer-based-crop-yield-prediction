@@ -7,8 +7,8 @@ deterministic: true
 # Per-model training budget — all models train under the same wall-clock
 # budget to keep the comparison fair.
 budget:
-  max_epochs: 100
-  early_stopping_patience: 15
+  max_epochs: 200                              # fine-tune regime
+  early_stopping_patience: 20      # fine-tune regime
   max_minutes: 60         # hard wall-clock cap per model on laptop GPU
 
 # Logging

@@ -55,13 +55,17 @@ class TFTModel(BaseModel):
             # legacy `pytorch_lightning` namespace. Using the wrong one makes
             # Trainer.fit() reject the model with a confusing isinstance error.
             import lightning.pytorch as pl
+            from lightning.pytorch.loggers import CSVLogger
             from pytorch_forecasting import TemporalFusionTransformer
-            from pytorch_forecasting.metrics import QuantileLoss
+            from pytorch_forecasting.metrics import MAE, QuantileLoss
             from torch.utils.data import DataLoader
         except ImportError as e:
             raise ImportError(
                 "Install pytorch-forecasting + lightning"
             ) from e
+
+        # Tensor-core matmul precision — Lightning warns without this on Ampere+
+        torch.set_float32_matmul_precision("high")
 
         from ..training.tft_adapter import (
             build_timeseries_dataset, prepare_tft_dataframe,
@@ -77,7 +81,8 @@ class TFTModel(BaseModel):
         )
         self.training_dataset = ds_tr
         train_loader = ds_tr.to_dataloader(
-            train=True, batch_size=self.config.get("batch_size", 128), num_workers=0,
+            train=True, batch_size=self.config.get("batch_size", 128),
+            num_workers=4, persistent_workers=True, pin_memory=True,
         )
 
         val_loader = None
@@ -91,20 +96,26 @@ class TFTModel(BaseModel):
                 max_prediction_length=1,
             )
             val_loader = ds_v.to_dataloader(
-                train=False, batch_size=self.config.get("batch_size", 128), num_workers=0,
+                train=False, batch_size=self.config.get("batch_size", 128),
+                num_workers=4, persistent_workers=True, pin_memory=True,
             )
 
-        # QuantileLoss defaults to 7 quantiles. We use 3 (P10/P50/P90) to match
-        # output_size=3 in the model config.
-        quantiles = [0.1, 0.5, 0.9]
+        loss_name = str(self.config.get("loss", "mae")).lower()
+        if loss_name == "quantile":
+            quantiles = [0.1, 0.5, 0.9]
+            loss_fn = QuantileLoss(quantiles=quantiles)
+            output_size = self.config.get("output_size", len(quantiles))
+        else:
+            loss_fn = MAE()
+            output_size = int(self.config.get("output_size", 1))
         self.model = TemporalFusionTransformer.from_dataset(
             ds_tr,
             hidden_size=self.config["hidden_size"],
             attention_head_size=self.config["attention_head_size"],
             dropout=self.config["dropout"],
             hidden_continuous_size=self.config["hidden_continuous_size"],
-            output_size=len(quantiles),
-            loss=QuantileLoss(quantiles=quantiles),
+            output_size=output_size,
+            loss=loss_fn,
             learning_rate=self.config["learning_rate"],
             log_interval=-1,  # disable per-step plotting (errorbar bug on
                               # non-monotonic early predictions)
@@ -115,14 +126,17 @@ class TFTModel(BaseModel):
         # Wall-clock cap comes from the config (experiment.yaml:max_minutes).
         # Default 55 min preserves the laptop-safe fallback when unset.
         cap_minutes = float(max_minutes) if max_minutes else 55.0
+        log_dir = Path("results/logs/tft")
+        log_dir.mkdir(parents=True, exist_ok=True)
         self.trainer = pl.Trainer(
             max_epochs=max_epochs,
             max_time={"minutes": cap_minutes},
             accelerator=accelerator,
             gradient_clip_val=0.1,
-            enable_progress_bar=False,  # avoid tqdm OS-level write overhead
+            enable_progress_bar=True,
             enable_checkpointing=True,
-            logger=False,                # don't write CSV logs (disk pressure)
+            logger=CSVLogger(save_dir=str(log_dir.parent), name=log_dir.name),
+            log_every_n_steps=50,
         )
         self.trainer.fit(self.model, train_dataloaders=train_loader,
                          val_dataloaders=val_loader)

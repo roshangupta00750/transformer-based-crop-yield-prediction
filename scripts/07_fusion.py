@@ -36,9 +36,16 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import nnls
-from sklearn.linear_model import Ridge
+from scipy.optimize import minimize, nnls
+from sklearn.linear_model import ElasticNet, Ridge, RidgeCV
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.model_selection import KFold
+
+try:
+    import xgboost as xgb
+    _HAVE_XGB = True
+except ImportError:
+    _HAVE_XGB = False
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -63,6 +70,9 @@ from src.utils import load_data_config
 DEFAULT_BASE_MODELS = ["xgboost", "dlinear", "itransformer", "lstm", "patchtst", "tft"]
 BASE_MODELS = list(DEFAULT_BASE_MODELS)  # can be reduced via CLI
 RIDGE_ALPHA = 1.0
+RIDGE_ALPHA_GRID = np.logspace(-3, 3, 13)  # 0.001 → 1000, 13 values
+VRF_THRESHOLD = 0.0  # drop per-crop bases with val R² below this
+TOP_K = 3            # top-K per crop for top_k_avg method
 CACHE_DIR = ROOT / "results" / "metrics"
 
 
@@ -147,89 +157,280 @@ def metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
             "n": int(len(y_true))}
 
 
+def _val_r2_per_model(Xval: np.ndarray, yval: np.ndarray) -> np.ndarray:
+    if np.var(yval) < 1e-9:
+        return np.zeros(Xval.shape[1])
+    return np.array([r2_score(yval, Xval[:, j]) for j in range(Xval.shape[1])])
+
+
+def _cv_ridge(Xval: np.ndarray, yval: np.ndarray,
+              alphas: np.ndarray) -> tuple[float, Ridge]:
+    """K-fold CV on val to pick alpha, refit on full val."""
+    n = len(yval)
+    k = min(5, max(2, n // 5))
+    kf = KFold(n_splits=k, shuffle=True, random_state=0)
+    best_alpha, best_mse = alphas[0], np.inf
+    for a in alphas:
+        mses = []
+        for tr, te in kf.split(Xval):
+            r = Ridge(alpha=a, fit_intercept=True)
+            r.fit(Xval[tr], yval[tr])
+            mses.append(mean_squared_error(yval[te], r.predict(Xval[te])))
+        m = float(np.mean(mses))
+        if m < best_mse:
+            best_mse, best_alpha = m, float(a)
+    ridge = Ridge(alpha=best_alpha, fit_intercept=True).fit(Xval, yval)
+    return best_alpha, ridge
+
+
+def _nnls_convex(Xval: np.ndarray, yval: np.ndarray) -> np.ndarray:
+    """Non-negative weights summing to 1 (convex combination) — no intercept."""
+    n_m = Xval.shape[1]
+    x0 = np.ones(n_m) / n_m
+    def loss(w):
+        return float(np.mean((yval - Xval @ w) ** 2))
+    cons = ({"type": "eq", "fun": lambda w: w.sum() - 1.0},)
+    bnds = [(0.0, 1.0)] * n_m
+    r = minimize(loss, x0, method="SLSQP", bounds=bnds, constraints=cons,
+                 options={"maxiter": 200, "ftol": 1e-9})
+    if r.success:
+        return r.x
+    # Fallback: uniform
+    return x0
+
+
+def _pooled_stack(val_wide: pd.DataFrame, test_wide: pd.DataFrame,
+                  crops: list[str]) -> list[dict]:
+    """Pooled cross-crop stacking. One meta-learner trained on all crops,
+    reported per-crop for fair comparison."""
+    v_all = val_wide.dropna(subset=BASE_MODELS + ["y_true"], how="any")
+    t_all = test_wide.dropna(subset=BASE_MODELS + ["y_true"], how="any")
+    v_all = v_all[v_all["crop"].isin(crops)]
+    t_all = t_all[t_all["crop"].isin(crops)]
+    if v_all.empty or t_all.empty:
+        return []
+    common = [m for m in BASE_MODELS if m in v_all.columns and m in t_all.columns]
+    if len(common) < 2:
+        return []
+
+    def to_features(df: pd.DataFrame) -> pd.DataFrame:
+        X = df[common].copy()
+        for c in crops:
+            X[f"crop_{c}"] = (df["crop"] == c).astype(int)
+        return X
+
+    Xv = to_features(v_all).to_numpy(dtype=np.float32)
+    yv = v_all["y_true"].to_numpy()
+    Xt = to_features(t_all).to_numpy(dtype=np.float32)
+
+    # Two variants: crop-aware GBT (small depth, sees interactions) and
+    # crop-aware Ridge (linear, safer for small val)
+    rows: list[dict] = []
+    try:
+        meta = xgb.XGBRegressor(
+            n_estimators=300, max_depth=4, learning_rate=0.05,
+            subsample=0.8, colsample_bytree=0.8, reg_alpha=0.1,
+            reg_lambda=1.0, random_state=0, n_jobs=1, verbosity=0,
+        )
+        meta.fit(Xv, yv)
+        preds = meta.predict(Xt)
+        for crop in crops:
+            mask = (t_all["crop"] == crop).to_numpy()
+            if not mask.any():
+                continue
+            yt = t_all.loc[mask, "y_true"].to_numpy()
+            yp = preds[mask]
+            rows.append({"crop": crop, "method": "stack_xgb_pooled",
+                         "n_base": len(common), **metrics(yt, yp)})
+    except Exception as e:  # noqa: BLE001
+        print(f"    stack_xgb_pooled failed: {e}")
+
+    try:
+        _, ridge_p = _cv_ridge(Xv, yv, RIDGE_ALPHA_GRID)
+        preds = ridge_p.predict(Xt)
+        for crop in crops:
+            mask = (t_all["crop"] == crop).to_numpy()
+            if not mask.any():
+                continue
+            yt = t_all.loc[mask, "y_true"].to_numpy()
+            yp = preds[mask]
+            rows.append({"crop": crop, "method": "stack_ridge_pooled",
+                         "n_base": len(common), **metrics(yt, yp)})
+    except Exception as e:  # noqa: BLE001
+        print(f"    stack_ridge_pooled failed: {e}")
+
+    return rows
+
+
 def fuse_per_crop(val_wide: pd.DataFrame,
                   test_wide: pd.DataFrame,
                   crop: str) -> tuple[list[dict], list[dict]]:
     """Apply all fusion methods to one crop. Returns (summary_rows, coef_rows)."""
-    v = val_wide[val_wide["crop"] == crop].dropna()
-    t = test_wide[test_wide["crop"] == crop].dropna()
-    common_models = sorted(set(BASE_MODELS) & set(v.columns) & set(t.columns))
-    if len(common_models) < 2:
-        print(f"  [{crop}] skip — only {len(common_models)} models with both splits")
+    v_all = val_wide[val_wide["crop"] == crop]
+    t_all = test_wide[test_wide["crop"] == crop]
+    # Only require completeness on the models we actually USE, not on every
+    # column present in the cache (else a stale extra column like TFT would
+    # silently drop rows in a 5-model run).
+    used_cols_all = sorted(set(BASE_MODELS) & set(v_all.columns) & set(t_all.columns))
+    if len(used_cols_all) < 2:
+        print(f"  [{crop}] skip — only {len(used_cols_all)} models with both splits")
         return [], []
+    v = v_all.dropna(subset=used_cols_all + ["y_true"])
+    t = t_all.dropna(subset=used_cols_all + ["y_true"])
+    common_models = used_cols_all
 
-    Xval = v[common_models].to_numpy()
+    Xval_full = v[common_models].to_numpy()
     yval = v["y_true"].to_numpy()
-    Xtest = t[common_models].to_numpy()
+    Xtest_full = t[common_models].to_numpy()
     ytest = t["y_true"].to_numpy()
-    print(f"  [{crop}] val={len(v)}, test={len(t)}, models={common_models}")
+
+    # Per-crop val R² → used for weighting AND filtering
+    val_r2_full = _val_r2_per_model(Xval_full, yval)
+
+    # Adaptive filter: drop models with val R² < VRF_THRESHOLD.
+    # If fewer than 2 models survive, fall back to the top-2 by val R².
+    keep = np.where(val_r2_full > VRF_THRESHOLD)[0]
+    if len(keep) < 2:
+        keep = np.argsort(-val_r2_full)[:2]
+    filt_models = [common_models[i] for i in keep]
+    Xval = Xval_full[:, keep]
+    Xtest = Xtest_full[:, keep]
+    val_r2 = val_r2_full[keep]
+
+    print(f"  [{crop}] val={len(v)}, test={len(t)}, "
+          f"models_full={common_models}, models_filt={filt_models}")
 
     summary: list[dict] = []
     coefs: list[dict] = []
 
-    # ── Method 1: Ridge ───────────────────────────────────────────────────
-    ridge = Ridge(alpha=RIDGE_ALPHA, fit_intercept=True)
-    ridge.fit(Xval, yval)
-    yhat = ridge.predict(Xtest)
-    summary.append({"crop": crop, "method": "ridge_alpha1",
-                    "n_base": len(common_models), **metrics(ytest, yhat)})
-    for c, w in zip(common_models, ridge.coef_):
-        coefs.append({"crop": crop, "method": "ridge_alpha1",
-                      "model": c, "coefficient": float(w)})
-    coefs.append({"crop": crop, "method": "ridge_alpha1",
-                  "model": "_intercept_", "coefficient": float(ridge.intercept_)})
+    def add(method: str, yhat: np.ndarray, n_base: int, extra: dict | None = None):
+        row = {"crop": crop, "method": method, "n_base": n_base,
+               **metrics(ytest, yhat)}
+        if extra:
+            row.update(extra)
+        summary.append(row)
 
-    # ── Method 2: NNLS (non-negative least squares) ──────────────────────
-    # No intercept by default — augment X with a column of ones to fit one.
-    Xv_nn = np.hstack([Xval, np.ones((len(Xval), 1))])
-    Xt_nn = np.hstack([Xtest, np.ones((len(Xtest), 1))])
+    def add_coefs(method: str, models: list[str], weights: np.ndarray,
+                  intercept: float | None = None):
+        for c, w in zip(models, weights):
+            coefs.append({"crop": crop, "method": method,
+                          "model": c, "coefficient": float(w)})
+        if intercept is not None:
+            coefs.append({"crop": crop, "method": method,
+                          "model": "_intercept_", "coefficient": float(intercept)})
+
+    # =====================================================================
+    # BASELINE METHODS (unchanged — computed on ALL models, no VRF filter)
+    # =====================================================================
+
+    # Ridge alpha=1 (legacy baseline)
+    ridge = Ridge(alpha=RIDGE_ALPHA, fit_intercept=True).fit(Xval_full, yval)
+    add("ridge_alpha1", ridge.predict(Xtest_full), len(common_models))
+    add_coefs("ridge_alpha1", common_models, ridge.coef_, float(ridge.intercept_))
+
+    # NNLS with intercept (legacy)
+    Xv_nn = np.hstack([Xval_full, np.ones((len(Xval_full), 1))])
+    Xt_nn = np.hstack([Xtest_full, np.ones((len(Xtest_full), 1))])
     w_nn, _ = nnls(Xv_nn, yval)
-    yhat = Xt_nn @ w_nn
-    summary.append({"crop": crop, "method": "nnls",
-                    "n_base": len(common_models), **metrics(ytest, yhat)})
-    for c, w in zip(common_models, w_nn[:-1]):
-        coefs.append({"crop": crop, "method": "nnls",
-                      "model": c, "coefficient": float(w)})
-    coefs.append({"crop": crop, "method": "nnls",
-                  "model": "_intercept_", "coefficient": float(w_nn[-1])})
+    add("nnls", Xt_nn @ w_nn, len(common_models))
+    add_coefs("nnls", common_models, w_nn[:-1], float(w_nn[-1]))
 
-    # ── Method 3: Simple average ──────────────────────────────────────────
-    yhat = Xtest.mean(axis=1)
-    summary.append({"crop": crop, "method": "simple_avg",
-                    "n_base": len(common_models), **metrics(ytest, yhat)})
+    # Simple average (legacy)
+    add("simple_avg", Xtest_full.mean(axis=1), len(common_models))
 
-    # ── Method 4: Weighted average by validation R² ──────────────────────
-    val_r2 = []
-    for j in range(Xval.shape[1]):
-        if np.var(yval) < 1e-9:
-            val_r2.append(0.0)
-        else:
-            val_r2.append(max(0.0, r2_score(yval, Xval[:, j])))
-    val_r2 = np.array(val_r2)
-    if val_r2.sum() > 0:
-        weights = val_r2 / val_r2.sum()
-        yhat = Xtest @ weights
+    # Weighted average by val R² (legacy: clipped to ≥0)
+    wval = np.maximum(0.0, val_r2_full)
+    if wval.sum() > 0:
+        weights = wval / wval.sum()
+        yhat = Xtest_full @ weights
     else:
-        yhat = Xtest.mean(axis=1)
+        yhat = Xtest_full.mean(axis=1)
         weights = np.ones(len(common_models)) / len(common_models)
-    summary.append({"crop": crop, "method": "weighted_avg_valr2",
-                    "n_base": len(common_models), **metrics(ytest, yhat)})
-    for c, w in zip(common_models, weights):
-        coefs.append({"crop": crop, "method": "weighted_avg_valr2",
-                      "model": c, "coefficient": float(w)})
+    add("weighted_avg_valr2", yhat, len(common_models))
+    add_coefs("weighted_avg_valr2", common_models, weights)
 
-    # ── Method 5: Median ──────────────────────────────────────────────────
-    yhat = np.median(Xtest, axis=1)
-    summary.append({"crop": crop, "method": "median",
-                    "n_base": len(common_models), **metrics(ytest, yhat)})
+    # Median (legacy)
+    add("median", np.median(Xtest_full, axis=1), len(common_models))
 
-    # ── Baseline: best single by validation R² (proper holdout selection)
-    best_idx = int(np.argmax(val_r2))
-    yhat = Xtest[:, best_idx]
-    summary.append({"crop": crop, "method": "best_single_by_val",
-                    "n_base": 1,
-                    **metrics(ytest, yhat),
-                    "best_model": common_models[best_idx]})
+    # Best single by val R² (baseline)
+    best_idx = int(np.argmax(val_r2_full))
+    add("best_single_by_val", Xtest_full[:, best_idx], 1,
+        {"best_model": common_models[best_idx]})
+
+    # =====================================================================
+    # ENHANCED METHODS
+    # =====================================================================
+
+    # Ridge CV — grid-search alpha per crop
+    alpha_best, ridge_cv = _cv_ridge(Xval_full, yval, RIDGE_ALPHA_GRID)
+    add("ridge_cv", ridge_cv.predict(Xtest_full), len(common_models),
+        {"best_model": f"alpha={alpha_best:.4g}"})
+    add_coefs("ridge_cv", common_models, ridge_cv.coef_, float(ridge_cv.intercept_))
+
+    # ElasticNet CV — L1+L2 combo, sparse selection
+    try:
+        from sklearn.linear_model import ElasticNetCV
+        en = ElasticNetCV(l1_ratio=[0.1, 0.3, 0.5, 0.7, 0.9],
+                          alphas=np.logspace(-3, 1, 20),
+                          cv=min(5, max(2, len(yval)//5)),
+                          fit_intercept=True, max_iter=5000, random_state=0)
+        en.fit(Xval_full, yval)
+        add("elasticnet_cv", en.predict(Xtest_full), len(common_models),
+            {"best_model": f"alpha={en.alpha_:.3g},l1={en.l1_ratio_:.2f}"})
+        add_coefs("elasticnet_cv", common_models, en.coef_, float(en.intercept_))
+    except Exception as e:  # noqa: BLE001
+        print(f"    elasticnet failed: {e}")
+
+    # VRF + simple average — mean over positively-scoring models only
+    add("vrf_simple_avg", Xtest.mean(axis=1), len(filt_models))
+
+    # VRF + NNLS
+    Xv_f = np.hstack([Xval, np.ones((len(Xval), 1))])
+    Xt_f = np.hstack([Xtest, np.ones((len(Xtest), 1))])
+    w_f, _ = nnls(Xv_f, yval)
+    add("vrf_nnls", Xt_f @ w_f, len(filt_models))
+    add_coefs("vrf_nnls", filt_models, w_f[:-1], float(w_f[-1]))
+
+    # VRF + Ridge CV
+    if len(filt_models) >= 2:
+        _, ridge_vrf = _cv_ridge(Xval, yval, RIDGE_ALPHA_GRID)
+        add("vrf_ridge_cv", ridge_vrf.predict(Xtest), len(filt_models))
+        add_coefs("vrf_ridge_cv", filt_models, ridge_vrf.coef_,
+                  float(ridge_vrf.intercept_))
+
+    # Convex combination (NNLS with sum=1, no intercept) — well-calibrated
+    w_cvx = _nnls_convex(Xval_full, yval)
+    add("convex_nnls", Xtest_full @ w_cvx, len(common_models))
+    add_coefs("convex_nnls", common_models, w_cvx)
+
+    # Trimmed mean — drop per-sample min AND max before averaging (robust to
+    # a single catastrophic model like TFT on summer_barley)
+    if len(common_models) >= 4:
+        sorted_test = np.sort(Xtest_full, axis=1)
+        yhat = sorted_test[:, 1:-1].mean(axis=1)
+        add("trimmed_mean_1", yhat, len(common_models))
+
+    # Top-K by val R² average
+    if len(common_models) >= TOP_K:
+        top_idx = np.argsort(-val_r2_full)[:TOP_K]
+        yhat = Xtest_full[:, top_idx].mean(axis=1)
+        add(f"top{TOP_K}_avg", yhat, TOP_K,
+            {"best_model": ",".join(common_models[i] for i in top_idx)})
+
+    # Stacking meta-learner — small XGBoost on val→test (linear + non-linear)
+    if _HAVE_XGB:
+        try:
+            meta = xgb.XGBRegressor(
+                n_estimators=200, max_depth=3, learning_rate=0.05,
+                subsample=0.8, colsample_bytree=0.8, reg_alpha=0.1,
+                reg_lambda=1.0, random_state=0, n_jobs=1, verbosity=0,
+            )
+            meta.fit(Xval_full, yval)
+            add("stack_xgb", meta.predict(Xtest_full), len(common_models))
+            add_coefs("stack_xgb", common_models,
+                      np.array(meta.feature_importances_))
+        except Exception as e:  # noqa: BLE001
+            print(f"    stack_xgb failed: {e}")
 
     return summary, coefs
 
@@ -276,6 +477,13 @@ def main() -> None:
         s, c = fuse_per_crop(val_wide, test_wide, crop)
         summary_rows.extend(s)
         coef_rows.extend(c)
+
+    # ── Cross-crop pooled stacking: single XGBoost meta-learner on ALL crops
+    # simultaneously, with per-crop bias correction + one-hot crop features.
+    # Effective val n = ~300+ samples (vs ~30-50 per-crop), so the meta model
+    # can actually learn.
+    if _HAVE_XGB and not val_wide.empty and not test_wide.empty:
+        summary_rows.extend(_pooled_stack(val_wide, test_wide, crops))
 
     if not summary_rows:
         print("No fusion results.")

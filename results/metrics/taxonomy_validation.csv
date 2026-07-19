@@ -1,11 +1,11 @@
 crop,predicted_primary,predicted_alternates,observed_best_model,observed_best_r2,predicted_primary_r2,primary_gap_vs_observed_r2,hit_at_1,hit_at_3,rationale
-winter_wheat,lstm,itransformer,lstm,0.638,0.638,0.0,1,1,Narrow anthesis-to-grain-fill window; LSTM gate learns to focus. Cross-feature interactions (water × temp) helped by iTransformer.
-winter_barley,lstm,"itransformer,patchtst",patchtst,0.458,0.035,0.423,0,1,Same phenology as wheat but shorter grain-fill; recurrent gates fit.
-rye,lstm,dlinear,lstm,0.569,0.569,0.0,1,1,"Drought-tolerant, simple phenology, weather-yield near-linear → LSTM or even DLinear works."
-triticale,lstm,itransformer,lstm,0.64,0.64,0.0,1,1,Wheat/rye hybrid; sequential winter-cereal phenology.
-winter_rapeseed,itransformer,patchtst,itransformer,0.655,0.655,0.0,1,1,Yield depends on cross-feature interactions (oil × water × temp × soil); iTransformer's cross-variable attention fits.
-summer_barley,itransformer,"lstm,xgboost",itransformer,0.388,0.388,0.0,1,1,Short season means feature interactions matter more than temporal depth; iTransformer wins.
-oats,itransformer,"lstm,xgboost",itransformer,0.504,0.504,0.0,1,1,"Same as summer barley — narrow window, cross-feature attention beats sequential."
-silage_maize,tft,"xgboost,patchtst",tft,0.43,0.43,0.0,1,1,Broad biomass-accumulation window; TFT attention captures cumulative growth. But XGBoost/PatchTST are close.
-potatoes,tft,itransformer,tft,0.562,0.562,0.0,1,1,"Multiple critical windows (emergence, tuber-init, bulking) + high harvest-timing sensitivity; TFT's long-horizon attention fits."
-sugar_beet,tft,itransformer,tft,0.579,0.579,0.0,1,1,"Longest season, multiple critical stages, harvest weather determines quality; TFT designed for exactly this."
+winter_wheat,lstm,itransformer,patchtst,0.624,0.497,0.127,0,0,Narrow anthesis-to-grain-fill window; LSTM gate learns to focus. Cross-feature interactions (water × temp) helped by iTransformer.
+winter_barley,lstm,"itransformer,patchtst",xgboost,0.464,0.268,0.195,0,0,Same phenology as wheat but shorter grain-fill; recurrent gates fit.
+rye,lstm,dlinear,itransformer,0.57,0.522,0.047,0,0,"Drought-tolerant, simple phenology, weather-yield near-linear → LSTM or even DLinear works."
+triticale,lstm,itransformer,patchtst,0.609,0.541,0.067,0,0,Wheat/rye hybrid; sequential winter-cereal phenology.
+winter_rapeseed,itransformer,patchtst,patchtst,0.617,0.545,0.072,0,1,Yield depends on cross-feature interactions (oil × water × temp × soil); iTransformer's cross-variable attention fits.
+summer_barley,itransformer,"lstm,xgboost",itransformer,0.349,0.349,0.0,1,1,Short season means feature interactions matter more than temporal depth; iTransformer wins.
+oats,itransformer,"lstm,xgboost",itransformer,0.509,0.509,0.0,1,1,"Same as summer barley — narrow window, cross-feature attention beats sequential."
+silage_maize,tft,"xgboost,patchtst",dlinear,0.457,0.442,0.014,0,0,Broad biomass-accumulation window; TFT attention captures cumulative growth. But XGBoost/PatchTST are close.
+potatoes,tft,itransformer,tft,0.52,0.52,0.0,1,1,"Multiple critical windows (emergence, tuber-init, bulking) + high harvest-timing sensitivity; TFT's long-horizon attention fits."
+sugar_beet,tft,itransformer,tft,0.452,0.452,0.0,1,1,"Longest season, multiple critical stages, harvest weather determines quality; TFT designed for exactly this."

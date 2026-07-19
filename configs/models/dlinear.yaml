@@ -2,5 +2,10 @@
 name: dlinear
 moving_avg_kernel: 25
 individual: false        # one linear per channel (true) vs. shared (false)
-learning_rate: 0.005
+learning_rate: 0.01      # bumped from 0.005 for faster convergence before overfit
 batch_size: 256
+weight_decay: 1.0e-4
+# Per-model budget override — DLinear overfits at 200 epochs (0.150 mean_r2),
+# revert to the pre-fine-tune regime that hit 0.215 mean_r2.
+max_epochs: 100
+early_stopping_patience: 15

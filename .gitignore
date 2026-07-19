@@ -54,3 +54,15 @@ gee-service-account.json
 cred.txt
 *.credentials
 *_token.txt
+
+# New land-eng noise (all safe to skip)
+lightning_logs/
+data/processed/dataset.pre_landfeatures.parquet
+data/processed/gee_satellite.parquet
+data/processed/static/dem_features.parquet
+data/processed/static/landcover_features.parquet
+data/processed/static/phenology_proxy.parquet
+data/processed/dataset.pre_land.*.parquet
+results/checkpoints_archive/
+results/checkpoints/_pre_landfeatures_*/
+results/logs/

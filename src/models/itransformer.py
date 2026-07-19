@@ -69,7 +69,8 @@ class ITransformerModel(BaseModel):
             n_layers=c["n_layers"], d_ff=c["d_ff"], dropout=c["dropout"],
         ).to(device)
         opt = torch.optim.AdamW(self.net.parameters(),
-                                lr=lr or c["learning_rate"])
+                                lr=lr or c["learning_rate"],
+                                weight_decay=c.get("weight_decay", 0.01))
         loss_fn = nn.MSELoss()
         deadline = time.time() + max_minutes * 60 if max_minutes else None
         best, bad = float("inf"), 0

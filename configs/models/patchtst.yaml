@@ -1,10 +1,13 @@
 # PatchTST (Nie et al., ICLR 2023)
 name: patchtst
-patch_len: 16
-stride: 8
+patch_len: 8             # finer tokenization (was 16)
+stride: 4                # was 8
 d_model: 128
 n_heads: 8
-n_layers: 3
-dropout: 0.1
-learning_rate: 0.0005
+n_layers: 4              # +1 encoder block (was 3)
+dropout: 0.15            # bumped from 0.10 for regularization
+learning_rate: 0.0003    # lower to compensate for larger network (was 5e-4)
 batch_size: 128
+# Per-model budget — small gain at 200/20, push to 300/30 to fully converge
+max_epochs: 300
+early_stopping_patience: 30

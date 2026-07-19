@@ -73,11 +73,19 @@ def _build_landkreis_fc(geo_dir: str | Path):
 
 
 def _reduce_image(fc, img, value_bands: list[str], scale: int):
-    """Reduce one image over the FeatureCollection. Returns a small dict list."""
+    """Reduce one image over the FeatureCollection. Returns a small dict list.
+
+    IMPORTANT: `ee.Reducer.mean()` on a SINGLE-band image writes its output as
+    "mean" (not the band name), so our earlier `.select(["landkreis",
+    "Lai_500m"])` silently dropped every LAI value — the LAI column came out
+    all-NULL. `Reducer.mean().forEachBand(img)` extends the reducer to one
+    output per band with the band name, which works for both single- and
+    multi-band images uniformly.
+    """
     import ee
     reduced = img.reduceRegions(
         collection=fc,
-        reducer=ee.Reducer.mean(),
+        reducer=ee.Reducer.mean().forEachBand(img),
         scale=scale,
     )
     fields = ["landkreis"] + value_bands
