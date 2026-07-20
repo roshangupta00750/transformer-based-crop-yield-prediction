@@ -84,7 +84,29 @@ def build_unified_dataset(
     df["year"] = df["date"].dt.year
     df["doy"] = df["date"].dt.dayofyear
 
-    df = df.merge(yld, on=["landkreis", "year"], how="inner")
+    # Left-join yield so unlabelled future years (e.g. 2024 forecast when
+    # Destatis has not published yet) still land in dataset.parquet with
+    # yield_dt_per_ha = NaN. Training code filters on target-notna, so 2024
+    # rows are naturally excluded from training. But 2024 rows DO need a
+    # crop assignment for the target years — inject one row per crop per
+    # (landkreis, year) with NaN target so per-crop inference paths still work.
+    labelled_years = sorted(yld["year"].unique())
+    all_years = sorted(df["year"].unique())
+    unlabelled_years = [y for y in all_years if y not in labelled_years]
+    df_labelled = df.merge(yld, on=["landkreis", "year"], how="inner")
+    if unlabelled_years:
+        df_unlab = df[df["year"].isin(unlabelled_years)].copy()
+        crops_present = sorted(yld["crop"].unique())
+        # Cross-join unlabelled years with all crops so inference sweeps each
+        # (crop, district, year=unlabelled).
+        df_unlab = df_unlab.merge(pd.DataFrame({"crop": crops_present}), how="cross")
+        df_unlab["yield_dt_per_ha"] = np.nan
+        # Align columns and concat
+        cols = df_labelled.columns
+        df_unlab = df_unlab.reindex(columns=cols)
+        df = pd.concat([df_labelled, df_unlab], ignore_index=True)
+    else:
+        df = df_labelled
     if soil is not None:
         df = df.merge(soil, on="landkreis", how="left")
 

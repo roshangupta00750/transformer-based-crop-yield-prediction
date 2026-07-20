@@ -49,6 +49,13 @@ def main() -> None:
     cfg = load_data_config()
     crops = cfg["crops"]
 
+    # Incremental write: append after each (model, crop) so a mid-eval crash
+    # (e.g. TFT loading OOM) still leaves a partial multicrop_summary.csv.
+    summary_path = ROOT / "results" / "metrics" / "multicrop_summary.csv"
+    if summary_path.exists():
+        summary_path.unlink()
+    header_written = False
+
     rows = []
     for model in MODELS:
         for crop in crops:
@@ -64,12 +71,15 @@ def main() -> None:
             r2 = r2_score(yt, yp)
             rmse = float(np.sqrt(mean_squared_error(yt, yp)))
             mae = float(mean_absolute_error(yt, yp))
-            rows.append({"model": model, "crop": crop, "r2": r2,
-                         "rmse": rmse, "mae": mae, "n": len(df)})
-            print(f"  {model:13s} {crop:16s} -> R²={r2:6.3f}  RMSE={rmse:8.2f}  n={len(df)}")
+            row = {"model": model, "crop": crop, "r2": r2,
+                   "rmse": rmse, "mae": mae, "n": len(df)}
+            rows.append(row)
+            pd.DataFrame([row]).to_csv(summary_path, mode="a", index=False,
+                                        header=not header_written)
+            header_written = True
+            print(f"  {model:13s} {crop:16s} -> R²={r2:6.3f}  RMSE={rmse:8.2f}  n={len(df)}", flush=True)
 
     summary = pd.DataFrame(rows)
-    summary.to_csv(ROOT / "results" / "metrics" / "multicrop_summary.csv", index=False)
 
     lead = (summary.groupby("model")
                    .agg(mean_r2=("r2", "mean"),

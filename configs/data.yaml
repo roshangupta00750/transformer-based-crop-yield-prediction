@@ -16,7 +16,7 @@ crops:
 
 years:
   start: 2003
-  end: 2023
+  end: 2024
 
 # Comma-separated list of NUTS-3 (Landkreis) codes, or "all" to use every Landkreis
 # in the yield table. Default keeps things small for development.
@@ -69,9 +69,9 @@ phenology:
 # ---- Splits -------------------------------------------------------------
 splits:
   temporal:
-    train_end_year: 2020
-    val_years: [2021]
-    test_years: [2022, 2023]
+    train_end_year: 2022
+    val_years: [2023]
+    test_years: [2024]
   spatial:
     strategy: "leave-one-out"   # or "stratified"
     sample_size: 50             # subsample N Landkreise for LOO sweep

@@ -173,7 +173,10 @@ def _predict_test_set_tft(crop: str,
 
     if not rows:
         return pd.DataFrame(), {"error": "TFT produced no predictions."}
-    out = pd.DataFrame(rows).dropna(subset=["y_pred", "y_true"])
+    # Drop only where the prediction itself is NaN. y_true may be NaN in
+    # forecast-only mode (e.g. predicting 2024 before Destatis 2024 is
+    # available); we still want the prediction row in the output.
+    out = pd.DataFrame(rows).dropna(subset=["y_pred"])
     out["residual"] = out["y_pred"] - out["y_true"]
     return out, None
 
