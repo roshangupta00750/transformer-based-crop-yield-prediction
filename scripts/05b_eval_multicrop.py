@@ -13,6 +13,7 @@ crop equally and reflects within-(district, crop) skill.
 """
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 import types
@@ -48,6 +49,25 @@ MODELS = ["xgboost", "dlinear", "itransformer", "lstm", "patchtst", "tft"]
 
 
 def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "--models",
+        default=",".join(MODELS),
+        help="Comma-separated subset to evaluate (default: all models).",
+    )
+    ap.add_argument(
+        "--resume",
+        action="store_true",
+        help="Keep existing summary rows and evaluate only missing pairs.",
+    )
+    args = ap.parse_args()
+    requested_models = [
+        model.strip() for model in args.models.split(",") if model.strip()
+    ]
+    unknown = sorted(set(requested_models) - set(MODELS))
+    if unknown:
+        ap.error(f"unknown models: {unknown}")
+
     cfg = load_data_config()
     crops = cfg["crops"]
 
@@ -57,13 +77,24 @@ def main() -> None:
     policy_path = ROOT / "results" / "metrics" / "feature_policy.json"
     if policy_path.exists():
         policy_path.unlink()
-    if summary_path.exists():
+    previous = pd.DataFrame()
+    if args.resume and summary_path.exists():
+        previous = pd.read_csv(summary_path)
+    elif summary_path.exists():
         summary_path.unlink()
-    header_written = False
+    completed = (
+        set(zip(previous["model"], previous["crop"]))
+        if not previous.empty
+        else set()
+    )
+    header_written = summary_path.exists() and summary_path.stat().st_size > 0
 
-    rows = []
-    for model in MODELS:
+    rows = previous.to_dict("records")
+    for model in requested_models:
         for crop in crops:
+            if (model, crop) in completed:
+                print(f"  {model:13s} {crop:16s} -> ALREADY DONE")
+                continue
             try:
                 df, err = mt._predict_test_set(model, crop)
             except Exception as e:  # noqa: BLE001
@@ -85,6 +116,11 @@ def main() -> None:
             print(f"  {model:13s} {crop:16s} -> R²={r2:6.3f}  RMSE={rmse:8.2f}  n={len(df)}", flush=True)
 
     summary = pd.DataFrame(rows)
+    if not summary.empty:
+        summary = summary.drop_duplicates(
+            subset=["model", "crop"], keep="last"
+        )
+        summary.to_csv(summary_path, index=False)
 
     lead = (summary.groupby("model")
                    .agg(mean_r2=("r2", "mean"),

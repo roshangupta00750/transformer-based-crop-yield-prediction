@@ -7,6 +7,7 @@ before scoring, so R²/RMSE/MAE are directly interpretable.
 from __future__ import annotations
 
 import json
+from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -26,6 +27,7 @@ def evaluate_at_horizons(
     harvest_doy: int,
     horizons_days: list[int],
     batch_size: int = 128,
+    sequence_length: int | None = None,
 ) -> dict[str, dict]:
     """Truncate test sequences at (harvest_doy − h) and score in dt/ha space."""
     df_test_t = pipeline.transform_features(df_test)
@@ -36,14 +38,19 @@ def evaluate_at_horizons(
         ds = CropYieldDataset(df_test_t, feature_spec, pipeline, cutoff_doy=cutoff)
         if len(ds) == 0:
             continue
-        loader = DataLoader(ds, batch_size=batch_size, collate_fn=collate_pad)
+        loader = DataLoader(
+            ds,
+            batch_size=batch_size,
+            collate_fn=partial(collate_pad, pad_to=sequence_length),
+        )
         z_pred = np.asarray(model.predict(loader)).ravel()
 
         lk = np.array([k[0] for k in ds.keys])
         cr = np.array([k[1] for k in ds.keys])
         y_pred_abs = pipeline.inverse_transform_array(lk, cr, z_pred)
-        y_true_abs = np.array([pipeline.inverse_transform_target(*k[:2], z)
-                               for k, z in zip(ds.keys, ds._targets_z)])
+        y_true_abs = pipeline.inverse_transform_observed_array(
+            lk, cr, np.asarray(ds._targets_z)
+        )
 
         results[f"h-{h}d"] = all_metrics(y_true_abs, y_pred_abs)
     return results

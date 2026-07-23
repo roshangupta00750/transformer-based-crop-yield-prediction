@@ -92,6 +92,11 @@ def main() -> None:
         harvest_doy=harvest_doy,
         horizons_days=data_cfg["in_season_horizons_days"],
         batch_size=model_cfg.get("batch_size", 128),
+        sequence_length=pipeline.sequence_length_ or max(
+            p["harvest_doy"] if p["sowing_doy"] > p["harvest_doy"]
+            else p["harvest_doy"] - p["sowing_doy"] + 1
+            for p in data_cfg["phenology"].values()
+        ),
     )
 
     out_path = (PROJECT_ROOT / exp_cfg["log"]["metrics_dir"]

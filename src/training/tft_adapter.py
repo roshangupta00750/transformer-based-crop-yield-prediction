@@ -19,6 +19,41 @@ import numpy as np
 import pandas as pd
 
 
+def transform_tft_features(df: pd.DataFrame, pipeline) -> pd.DataFrame:
+    """Apply the saved train-only feature transform required by TFT.
+
+    The generic model path transforms features before constructing
+    ``CropYieldDataset``. TFT's direct PyTorch Forecasting evaluation path
+    bypasses that wrapper, so it must explicitly apply the same saved means
+    and standard deviations. This also fills bounded-causal preprocessing
+    gaps with training-only means.
+    """
+    pipeline.require_current_feature_policy()
+    feature_cols = list(dict.fromkeys(
+        pipeline.spec.past_observed
+        + pipeline.spec.static
+        + pipeline.spec.known_future
+    ))
+    missing_cols = [c for c in feature_cols if c not in df.columns]
+    if missing_cols:
+        raise KeyError(f"TFT input is missing trained features: {missing_cols}")
+
+    out = pipeline.transform_features(df)
+    values = out[feature_cols].to_numpy(dtype=float)
+    nonfinite = ~np.isfinite(values)
+    if nonfinite.any():
+        counts = {
+            col: int(nonfinite[:, i].sum())
+            for i, col in enumerate(feature_cols)
+            if nonfinite[:, i].any()
+        }
+        raise ValueError(
+            "TFT features remain non-finite after the saved train-only "
+            f"transform: {counts}"
+        )
+    return out
+
+
 @dataclass
 class TFTColumns:
     """Defines column roles for pytorch-forecasting."""

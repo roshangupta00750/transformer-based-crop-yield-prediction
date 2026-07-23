@@ -296,6 +296,7 @@ class FeaturePipeline:
         # out-of-distribution district can't produce a physically impossible
         # value (e.g. 175 dt/ha rapeseed) that wrecks pooled RMSE / R².
         self.target_clip_by_crop_: dict[str, list[float]] = {}
+        self.sequence_length_: int | None = None
         self.fitted_ = False
 
     def fit(self, df_train: pd.DataFrame) -> "FeaturePipeline":
@@ -395,6 +396,33 @@ class FeaturePipeline:
             val = z * self.target_global_std_ + self.target_global_mean_
         return float(self._clip(crop, val))
 
+    def inverse_transform_observed_target(
+        self, landkreis: str, crop: str, z: float
+    ) -> float:
+        """Recover an observed target exactly, without prediction clipping."""
+        if self.anomaly_framing:
+            return float(
+                z * self._anomaly_std(crop)
+                + self.baseline_yield(landkreis, crop)
+            )
+        return float(
+            z * self.target_global_std_ + self.target_global_mean_
+        )
+
+    def inverse_transform_observed_array(
+        self, landkreis: np.ndarray, crop: np.ndarray, z: np.ndarray
+    ) -> np.ndarray:
+        """Vectorized exact inverse for ground-truth targets."""
+        z = np.asarray(z, dtype=float)
+        if self.anomaly_framing:
+            base = np.array([
+                self.target_mean_.get((lk, cr), self.target_global_mean_)
+                for lk, cr in zip(landkreis, crop)
+            ])
+            std = np.array([self._anomaly_std(cr) for cr in crop])
+            return z * std + base
+        return z * self.target_global_std_ + self.target_global_mean_
+
     def inverse_transform_array(
         self, landkreis: np.ndarray, crop: np.ndarray, z: np.ndarray
     ) -> np.ndarray:
@@ -430,6 +458,7 @@ class FeaturePipeline:
             "target_anomaly_std": self.target_anomaly_std_,
             "target_anomaly_std_by_crop": self.target_anomaly_std_by_crop_,
             "target_clip_by_crop": self.target_clip_by_crop_,
+            "sequence_length": self.sequence_length_,
         }
         path.write_text(json.dumps(payload))
 
@@ -447,6 +476,7 @@ class FeaturePipeline:
         p.target_anomaly_std_ = d["target_anomaly_std"]
         p.target_anomaly_std_by_crop_ = d.get("target_anomaly_std_by_crop", {})
         p.target_clip_by_crop_ = d.get("target_clip_by_crop", {})
+        p.sequence_length_ = d.get("sequence_length")
         p.fitted_ = True
         return p
 
@@ -594,8 +624,16 @@ class CropYieldDataset(Dataset):
 # --------------------------------------------------------------------------- #
 # Collate
 # --------------------------------------------------------------------------- #
-def collate_pad(batch: list[dict]) -> dict[str, "torch.Tensor"]:
-    max_T = max(item["x_past"].shape[0] for item in batch)
+def collate_pad(
+    batch: list[dict],
+    pad_to: int | None = None,
+) -> dict[str, "torch.Tensor"]:
+    observed_max = max(item["x_past"].shape[0] for item in batch)
+    if pad_to is not None and observed_max > pad_to:
+        raise ValueError(
+            f"batch sequence length {observed_max} exceeds pad_to={pad_to}"
+        )
+    max_T = max(observed_max, pad_to or 0)
     F_past = batch[0]["x_past"].shape[1]
     F_fut = batch[0]["x_future"].shape[1]
     S = batch[0]["x_static"].shape[0]

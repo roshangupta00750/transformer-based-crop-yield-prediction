@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from functools import partial
 from pathlib import Path
 
 import pandas as pd
@@ -124,17 +125,23 @@ def main() -> None:
             spec.static.append("district_baseline")
         pipeline = FeaturePipeline(spec, anomaly_framing=False).fit(df_train)
         log.info("Added district_baseline static feature.")
+    sequence_length = int(
+        df.groupby(["landkreis", "crop", "year"])["doy"].nunique().max()
+    )
+    pipeline.sequence_length_ = sequence_length
+    collate = partial(collate_pad, pad_to=sequence_length)
+    log.info("Fixed sequence padding length: %d", sequence_length)
     df_train_t = pipeline.transform_features(df_train)
     df_val_t = pipeline.transform_features(df_val)
 
     bs = model_cfg.get("batch_size", 64)
     train_loader = DataLoader(
         CropYieldDataset(df_train_t, spec, pipeline),
-        batch_size=bs, shuffle=True, collate_fn=collate_pad, num_workers=0,
+        batch_size=bs, shuffle=True, collate_fn=collate, num_workers=0,
     )
     val_loader = DataLoader(
         CropYieldDataset(df_val_t, spec, pipeline),
-        batch_size=bs, shuffle=False, collate_fn=collate_pad, num_workers=0,
+        batch_size=bs, shuffle=False, collate_fn=collate, num_workers=0,
     )
     log.info("DataLoaders ready: train=%d samples, val=%d samples",
              len(train_loader.dataset), len(val_loader.dataset))

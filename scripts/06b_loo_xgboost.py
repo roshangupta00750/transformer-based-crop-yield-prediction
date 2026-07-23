@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from functools import partial
 from pathlib import Path
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -92,6 +93,14 @@ def main() -> None:
             # Feature spec + pipeline fitted on the leave-one-out training set.
             spec = build_feature_spec(df_train, data_cfg)
             pipe = FeaturePipeline(spec).fit(df_train)
+            pipe.sequence_length_ = int(
+                df_train.groupby(["landkreis", "crop", "year"])["doy"]
+                .nunique()
+                .max()
+            )
+            collate = partial(
+                collate_pad, pad_to=pipe.sequence_length_
+            )
             df_train_t = pipe.transform_features(df_train)
             df_test_t = pipe.transform_features(df_test)
 
@@ -103,9 +112,9 @@ def main() -> None:
                 continue
 
             tr_loader = DataLoader(ds_tr, batch_size=128,
-                                   collate_fn=collate_pad)
+                                   collate_fn=collate)
             te_loader = DataLoader(ds_te, batch_size=128,
-                                   collate_fn=collate_pad)
+                                   collate_fn=collate)
             Xtr, ytr = loader_to_xy(tr_loader)
             Xte, _ = loader_to_xy(te_loader)
 
@@ -124,8 +133,9 @@ def main() -> None:
             lk_arr = np.array([k[0] for k in ds_te.keys])
             cr_arr = np.array([k[1] for k in ds_te.keys])
             y_pred = pipe.inverse_transform_array(lk_arr, cr_arr, z_pred)
-            y_true = np.array([pipe.inverse_transform_target(*k[:2], z)
-                               for k, z in zip(ds_te.keys, ds_te._targets_z)])
+            y_true = pipe.inverse_transform_observed_array(
+                lk_arr, cr_arr, np.asarray(ds_te._targets_z)
+            )
 
             if np.var(y_true) < 1e-9 or len(y_true) < 2:
                 # Single test point or zero variance -> R² undefined; record

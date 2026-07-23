@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import sys
+from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -50,11 +51,11 @@ def _predict_test_set_tft(crop: str,
     try:
         from pytorch_forecasting import TemporalFusionTransformer, TimeSeriesDataSet
         from src.data.dataset import (
-            build_feature_spec, prepare_modeling_frame,
-            require_current_dataset_policy,
+            prepare_modeling_frame, require_current_dataset_policy,
         )
         from src.training.tft_adapter import (build_timeseries_dataset,
-                                              prepare_tft_dataframe)
+                                              prepare_tft_dataframe,
+                                              transform_tft_features)
         from src.utils import load_data_config
     except Exception as e:  # noqa: BLE001
         return pd.DataFrame(), {"error": f"TFT eval imports failed: {e}"}
@@ -85,9 +86,14 @@ def _predict_test_set_tft(crop: str,
     test_years = years if years is not None else \
         data_cfg["splits"]["temporal"]["test_years"]
 
-    safe_spec = build_feature_spec(df_all, data_cfg)
-    soil_cols = safe_spec.static
-    weather_sat_cols = safe_spec.past_observed
+    # TFT bypasses CropYieldDataset at evaluation time, so apply the exact
+    # saved train-only normalization/imputation used during training.
+    try:
+        df_all = transform_tft_features(df_all, safe_pipeline)
+    except (KeyError, ValueError, RuntimeError) as e:
+        return pd.DataFrame(), {"error": f"TFT feature transform failed: {e}"}
+    soil_cols = list(safe_pipeline.spec.static)
+    weather_sat_cols = list(safe_pipeline.spec.past_observed)
 
     # IMPORTANT: build train_ds on ALL crops the model was trained on, so the
     # categorical encoders + GroupNormalizer match the checkpoint. Filtering to
@@ -282,7 +288,16 @@ def _predict_test_set(model: str, crop: str,
     ds = CropYieldDataset(df_test_t, pipeline.spec, pipeline, cutoff_doy=cutoff_doy)
     if len(ds) == 0:
         return pd.DataFrame(), {"error": "Empty CropYieldDataset."}
-    loader = DataLoader(ds, batch_size=128, collate_fn=collate_pad)
+    sequence_length = pipeline.sequence_length_ or max(
+        p["harvest_doy"] if p["sowing_doy"] > p["harvest_doy"]
+        else p["harvest_doy"] - p["sowing_doy"] + 1
+        for p in data_cfg["phenology"].values()
+    )
+    loader = DataLoader(
+        ds,
+        batch_size=128,
+        collate_fn=partial(collate_pad, pad_to=sequence_length),
+    )
     try:
         z_pred = np.asarray(m.predict(loader)).ravel()
     except Exception as e:  # noqa: BLE001
@@ -293,8 +308,9 @@ def _predict_test_set(model: str, crop: str,
     cr = np.array([k[1] for k in keys])
     yrs = np.array([k[2] for k in keys])
     y_pred = pipeline.inverse_transform_array(lk, cr, z_pred)
-    y_true = np.array([pipeline.inverse_transform_target(*k[:2], z)
-                       for k, z in zip(keys, ds._targets_z)])
+    y_true = pipeline.inverse_transform_observed_array(
+        lk, cr, np.asarray(ds._targets_z)
+    )
 
     return pd.DataFrame({
         "landkreis": lk, "year": yrs, "y_true": y_true, "y_pred": y_pred,

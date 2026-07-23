@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import sys
+from functools import partial
 from pathlib import Path
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -43,10 +44,11 @@ def tft_interpretation(crop: str, max_batches: int = 4) -> dict | None:
         from pytorch_forecasting import (TemporalFusionTransformer,
                                          TimeSeriesDataSet)
         from src.data.dataset import (
-            FeaturePipeline, build_feature_spec, prepare_modeling_frame,
+            FeaturePipeline, prepare_modeling_frame,
         )
         from src.training.tft_adapter import (build_timeseries_dataset,
-                                              prepare_tft_dataframe)
+                                              prepare_tft_dataframe,
+                                              transform_tft_features)
         from src.utils import load_data_config
     except Exception:  # noqa: BLE001
         return None
@@ -62,7 +64,8 @@ def tft_interpretation(crop: str, max_batches: int = 4) -> dict | None:
     if not pipeline_path.exists():
         return None
     try:
-        FeaturePipeline.load(pipeline_path).require_current_feature_policy()
+        safe_pipeline = FeaturePipeline.load(pipeline_path)
+        safe_pipeline.require_current_feature_policy()
     except RuntimeError:
         return None
 
@@ -72,13 +75,16 @@ def tft_interpretation(crop: str, max_batches: int = 4) -> dict | None:
         return None
     df_all = pd.read_parquet(parquet)
     df_all = prepare_modeling_frame(df_all, cfg)
+    try:
+        df_all = transform_tft_features(df_all, safe_pipeline)
+    except (KeyError, ValueError, RuntimeError):
+        return None
 
     train_end = cfg["splits"]["temporal"]["train_end_year"]
     test_years = cfg["splits"]["temporal"]["test_years"]
 
-    safe_spec = build_feature_spec(df_all, cfg)
-    soil_cols = safe_spec.static
-    weather_sat_cols = safe_spec.past_observed
+    soil_cols = list(safe_pipeline.spec.static)
+    weather_sat_cols = list(safe_pipeline.spec.past_observed)
 
     df_train_all = df_all[df_all["year"] <= train_end]
     df_tr, cols = prepare_tft_dataframe(
@@ -206,8 +212,16 @@ def _capture_attention_run(model_name: str, crop: str,
     ds = CropYieldDataset(df_test_t, pipe.spec, pipe)
     if len(ds) == 0:
         return None
-    loader = DataLoader(ds, batch_size=min(32, len(ds)),
-                        collate_fn=collate_pad)
+    sequence_length = pipe.sequence_length_ or max(
+        p["harvest_doy"] if p["sowing_doy"] > p["harvest_doy"]
+        else p["harvest_doy"] - p["sowing_doy"] + 1
+        for p in data_cfg["phenology"].values()
+    )
+    loader = DataLoader(
+        ds,
+        batch_size=min(32, len(ds)),
+        collate_fn=partial(collate_pad, pad_to=sequence_length),
+    )
 
     mdl = build_model(model_name, model_cfg)
     mdl.load(ckpt)

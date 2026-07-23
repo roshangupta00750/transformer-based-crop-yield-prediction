@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import random
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,9 @@ def set_seed(seed: int = 42) -> None:
 
 
 def pick_device(preference: str = "auto") -> str:
+    env_override = os.environ.get("CROP_YIELD_DEVICE")
+    if env_override:
+        preference = env_override
     if preference == "cpu":
         return "cpu"
     if _HAS_TORCH and torch.cuda.is_available() and preference in ("auto", "cuda"):

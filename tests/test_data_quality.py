@@ -1,13 +1,19 @@
 """Tests for the leakage-safe data policy."""
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
+import torch
 
 from src.data.acquisition.gee_satellite import clean as clean_satellite
 from src.data.dataset import (
+    FeaturePipeline,
+    FeatureSpec,
     build_feature_spec,
+    collate_pad,
     filter_incomplete_sequences,
 )
+from src.training.tft_adapter import transform_tft_features
 from src.utils import load_data_config
 
 
@@ -101,3 +107,76 @@ def test_satellite_values_expire_after_composite_window(tmp_path) -> None:
     assert stale_day["ndvi_stale"] == 1
     assert stale_day["ndvi_age_days"] == 33
     assert pd.isna(stale_day["ndvi"])
+
+
+def test_tft_transform_uses_saved_train_mean_for_nan() -> None:
+    spec = FeatureSpec(
+        past_observed=["weather"],
+        static=["soil"],
+        known_future=["calendar"],
+    )
+    train = pd.DataFrame(
+        {
+            "landkreis": ["A", "A"],
+            "crop": ["crop", "crop"],
+            "year": [2020, 2021],
+            "weather": [1.0, 3.0],
+            "soil": [5.0, 5.0],
+            "calendar": [-1.0, 1.0],
+            "yield_dt_per_ha": [10.0, 12.0],
+        }
+    )
+    pipeline = FeaturePipeline(spec).fit(train)
+    test = train.iloc[[0]].copy()
+    test["weather"] = float("nan")
+
+    transformed = transform_tft_features(test, pipeline)
+    assert transformed["weather"].iloc[0] == 0.0
+    assert transformed[["weather", "soil", "calendar"]].notna().all().all()
+
+
+def test_collate_pad_can_preserve_training_sequence_length() -> None:
+    def item(length: int) -> dict:
+        return {
+            "x_past": torch.ones(length, 2),
+            "x_future": torch.ones(length, 1),
+            "x_static": torch.ones(3),
+            "y": torch.tensor(1.0),
+        }
+
+    batch = collate_pad([item(3), item(5)], pad_to=7)
+
+    assert batch["x_past"].shape == (2, 7, 2)
+    assert batch["x_future"].shape == (2, 7, 1)
+    assert batch["mask"].sum(dim=1).tolist() == [3, 5]
+    assert torch.count_nonzero(batch["x_past"][0, 3:]) == 0
+    assert torch.count_nonzero(batch["x_past"][1, 5:]) == 0
+
+
+def test_observed_target_inverse_does_not_clip_ground_truth() -> None:
+    spec = FeatureSpec(past_observed=[], static=[], known_future=[])
+    train = pd.DataFrame(
+        {
+            "landkreis": ["A", "A", "A"],
+            "crop": ["crop", "crop", "crop"],
+            "year": [2018, 2019, 2020],
+            "yield_dt_per_ha": [10.0, 12.0, 14.0],
+        }
+    )
+    pipeline = FeaturePipeline(spec).fit(train)
+    landkreis = np.array(["A"])
+    crop = np.array(["crop"])
+    observed = np.array([100.0])
+    z = np.array([
+        pipeline.transform_target("A", "crop", float(observed[0]))
+    ])
+
+    recovered = pipeline.inverse_transform_observed_array(
+        landkreis, crop, z
+    )
+    clipped_prediction = pipeline.inverse_transform_array(
+        landkreis, crop, z
+    )
+
+    np.testing.assert_allclose(recovered, observed)
+    assert clipped_prediction[0] != observed[0]

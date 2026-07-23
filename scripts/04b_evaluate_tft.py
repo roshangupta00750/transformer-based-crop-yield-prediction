@@ -25,12 +25,12 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.data.dataset import (
-    FeaturePipeline, build_feature_spec, prepare_modeling_frame,
-    require_current_dataset_policy,
+    FeaturePipeline, prepare_modeling_frame, require_current_dataset_policy,
 )
 from src.evaluation.metrics import all_metrics
 from src.training.tft_adapter import (build_timeseries_dataset,
-                                      prepare_tft_dataframe)
+                                      prepare_tft_dataframe,
+                                      transform_tft_features)
 from src.utils import (get_logger, load_data_config, load_experiment_config,
                        PROJECT_ROOT)
 
@@ -49,26 +49,14 @@ def main() -> None:
 
     unified = PROJECT_ROOT / data_cfg["paths"]["unified_dataset"]
     require_current_dataset_policy(unified)
-    df = pd.read_parquet(unified)
-    df = df[df["crop"] == args.crop]
-    df = prepare_modeling_frame(df, data_cfg)
+    df_all = pd.read_parquet(unified)
+    df_all = prepare_modeling_frame(df_all, data_cfg)
 
     train_end = data_cfg["splits"]["temporal"]["train_end_year"]
     test_years = data_cfg["splits"]["temporal"]["test_years"]
-    df_train = df[df["year"] <= train_end]
+    df_train = df_all[df_all["year"] <= train_end]
     if df_train.empty:
         log.error("No training data."); sys.exit(1)
-
-    spec = build_feature_spec(df, data_cfg)
-    soil_cols = spec.static
-    weather_sat_cols = spec.past_observed
-
-    df_tr, cols = prepare_tft_dataframe(
-        df_train, soil_cols=soil_cols, weather_sat_cols=weather_sat_cols,
-    )
-    train_ds = build_timeseries_dataset(
-        df_tr, cols, max_encoder_length=180, max_prediction_length=1,
-    )
 
     ckpt = PROJECT_ROOT / exp_cfg["log"]["checkpoints_dir"] / "tft.pt"
     if not ckpt.exists():
@@ -77,7 +65,22 @@ def main() -> None:
     if not pipeline_path.exists():
         log.error("Missing tft.pipeline.json — retrain under the safe policy.")
         sys.exit(1)
-    FeaturePipeline.load(pipeline_path).require_current_feature_policy()
+    pipeline = FeaturePipeline.load(pipeline_path)
+    pipeline.require_current_feature_policy()
+    df_all = transform_tft_features(df_all, pipeline)
+    df_train = df_all[df_all["year"] <= train_end]
+    df = df_all[df_all["crop"] == args.crop].copy()
+    soil_cols = list(pipeline.spec.static)
+    weather_sat_cols = list(pipeline.spec.past_observed)
+
+    # Rebuild the reference dataset on the same all-crop population used by
+    # training so categorical encoders and target normalizers match.
+    df_tr, cols = prepare_tft_dataframe(
+        df_train, soil_cols=soil_cols, weather_sat_cols=weather_sat_cols,
+    )
+    train_ds = build_timeseries_dataset(
+        df_tr, cols, max_encoder_length=180, max_prediction_length=1,
+    )
     model = TemporalFusionTransformer.load_from_checkpoint(str(ckpt))
     model.eval()
 
