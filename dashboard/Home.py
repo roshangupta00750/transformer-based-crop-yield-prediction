@@ -51,7 +51,7 @@ st.info(
 
 st.subheader(
     "A first-principles crop-model taxonomy picks the winning architecture "
-    "on 9 of 10 crops across 401 German districts."
+    "on most German districts."
 )
 
 # --------------------------------------------------------------------------- #
@@ -172,26 +172,53 @@ else:
 # --------------------------------------------------------------------------- #
 divider("Take a tour")
 
+# Fresh values for the tour cards below — read straight from the same CSVs
+# their linked pages render, so no card ever drifts from its target page.
+try:
+    _fs6 = pd.read_csv(METRICS_DIR / "fusion_summary_6models.csv")
+    vrf_mean_r2 = float(_fs6[_fs6["method"] == "vrf_simple_avg"]["r2"].mean())
+except Exception:
+    vrf_mean_r2 = float("nan")
+
+try:
+    _cc_daily = pd.read_csv(METRICS_DIR / "counterfactual_daily_summary.csv")
+    _ssp5 = _cc_daily[_cc_daily["scenario"] == "ssp5_8_5"]
+    climate_tas_delta_c = float(_ssp5["tasmax_delta_C"].iloc[0])
+    _per_model = _ssp5.groupby("model")["delta_pct"].mean()
+    climate_pct_min = float(_per_model.min())
+    climate_pct_max = float(_per_model.max())
+except Exception:
+    climate_tas_delta_c = float("nan")
+    climate_pct_min = float("nan")
+    climate_pct_max = float("nan")
+
+_headline_rho = f"{mean_rho:+.2f}" if mean_rho is not None else "—"
+_headline_hits = f"{hit1}/{n_crops_val}" if n_crops_val else "—"
+
 INSIGHT_CARDS = [
     dict(title="The headline test",
-         big="9/10 top-1  ·  ρ +0.69",
-         body="Taxonomy-predicted primary wins on 9 of 10 crops; predicted "
-              "ranking matches observed at Spearman +0.69.",
+         big=f"{_headline_hits} top-1  ·  ρ {_headline_rho}",
+         body=(f"Taxonomy-predicted primary wins on {hit1} of {n_crops_val} "
+               f"crops; predicted ranking matches observed at Spearman "
+               f"{_headline_rho}."),
          page=PAGES / "13_Taxonomy.py", label="Open Taxonomy"),
     dict(title="Full crop × model leaderboard",
-         big="60 cells scored",
+         big=f"{n_crops_all * n_models} cells scored",
          body="Per-crop R² for all six architectures with taxonomy "
-              "predicted/actual overlay on the 2022-2023 test split.",
+              "predicted/actual overlay on the 2024-2025 test split.",
          page=PAGES / "09_Leaderboard.py", label="Open Leaderboard"),
     dict(title="Climate stress test",
-         big="+0.58 °C SSP5-8.5",
-         body="Under CMIP6 warming, models diverge from -0.43 % to +0.60 % "
-              "yield change — spread as a free OOD signal.",
+         big=f"{climate_tas_delta_c:+.2f} °C SSP5-8.5",
+         body=(f"Under CMIP6 SSP5-8.5 warming ({climate_tas_delta_c:+.2f} °C "
+               f"tasmax), per-model mean yield deltas span "
+               f"{climate_pct_min:+.2f}% to {climate_pct_max:+.2f}% — spread "
+               f"as a free OOD signal."),
          page=PAGES / "15_Climate.py", label="Open Climate"),
     dict(title="Fusion when TFT joins",
-         big="+0.19 mean R²",
-         body="Adding TFT lifts per-crop val-selection by ~0.19 R²; "
-              "non-negativity guardrails keep heterogeneous specialists safe.",
+         big=f"{vrf_mean_r2:+.2f} mean R²",
+         body=(f"Voting-average fusion (VRF simple-avg, 6 models) reaches "
+               f"{vrf_mean_r2:+.2f} mean R² across crops; non-negativity "
+               f"guardrails keep heterogeneous specialists safe."),
          page=PAGES / "14_Fusion.py", label="Open Fusion"),
     dict(title="Literature sanity check",
          big="Within / above range",
@@ -228,7 +255,15 @@ for row_start in range(0, len(INSIGHT_CARDS), 3):
 # --------------------------------------------------------------------------- #
 # Footer — one line only
 # --------------------------------------------------------------------------- #
+if not unified.empty and "year" in unified.columns:
+    _year_min = int(unified["year"].min())
+    _year_max = int(unified["year"].max())
+    _year_span = f"{_year_min}-{_year_max}"
+else:
+    _year_span = "2003-2025"
+
 st.caption(
-    "10 German crops · 401 NUTS-3 districts · 2003-2023 · 6 architectures · "
-    "one unified dataset. Source & full methodology in the sidebar."
+    f"{n_crops_all} German crops · {n_districts} NUTS-3 districts · "
+    f"{_year_span} · {n_models} architectures · one unified dataset. "
+    "Source & full methodology in the sidebar."
 )

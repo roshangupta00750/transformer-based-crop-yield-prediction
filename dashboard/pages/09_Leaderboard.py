@@ -29,7 +29,8 @@ page_header("Head-to-head Leaderboard",
 st.markdown(
     "### TL;DR\n\n"
     "Across six architectures and ten crops, the taxonomy's PRIMARY pick "
-    "lands as the top-1 winner in 9 of 10 crops on the 2022-2023 test split."
+    "aligns with the empirical top-1 winner on most crops on the 2024-2025 "
+    "held-out test split."
 )
 
 with st.expander("More details", expanded=False):
@@ -48,7 +49,7 @@ tax = load_taxonomy()
 # --------------------------------------------------------------------------- #
 divider("Best-per-model leaderboard")
 st.caption(
-    "Best R² per model on the 2022-2023 temporal test split — the single "
+    "Best R² per model on the 2024-2025 temporal test split — the single "
     "number the six-way head-to-head collapses to."
 )
 
@@ -87,11 +88,8 @@ else:
         metrics_main.sort_values("h_days"),
         x="h_days", y="r2", color="model", markers=True,
         labels={"h_days": "Days pre-harvest", "r2": "R²", "model": "Model"},
-        title="R² vs. in-season horizon — winter wheat, 2022-2023 test",
+        title="R² vs. in-season horizon — winter wheat, 2024-2025 test",
     )
-    fig.add_hline(y=0.64, line_dash="dash", line_color="grey",
-                  annotation_text="per-district mean baseline (0.64)",
-                  annotation_position="bottom right")
     fig.update_layout(height=440, hovermode="x unified")
     st.plotly_chart(fig, width="stretch")
 
@@ -102,7 +100,7 @@ mc = load_multicrop_summary()
 if not mc.empty:
     divider("Per-crop leaderboard with taxonomy overlay")
     st.caption(
-        "R² per (model, crop) on the 2022-2023 test split. Each cell tagged "
+        "R² per (model, crop) on the 2024-2025 test split. Each cell tagged "
         "with **[P]** if the taxonomy predicted this model as PRIMARY for "
         "this crop, **[A]** if alternate. If the observed best model (green "
         "text) matches taxonomy [P] — that's a top-1 hit."

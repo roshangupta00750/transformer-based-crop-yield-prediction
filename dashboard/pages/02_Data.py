@@ -20,8 +20,8 @@ page_header("Data sources & previews",
 
 st.markdown(
     "### TL;DR\n\n"
-    "One unified dataset — 10 crops × 401 NUTS-3 districts × 21 years "
-    "(2003-2023) — assembled from four fully-provenanced open sources "
+    "One unified dataset — 10 crops × 401 NUTS-3 districts × 23 years "
+    "(2003-2025) — assembled from four fully-provenanced open sources "
     "(weather, satellite, soil, yield)."
 )
 

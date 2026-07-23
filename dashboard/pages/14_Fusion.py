@@ -136,12 +136,21 @@ else:
     styled = disp.style.format(fmt)
 st.dataframe(styled, hide_index=True, width="stretch")
 
+if (
+    "Δ (6-5)" in pivot_r2.columns
+    and "best_single_by_val" in pivot_r2.index
+):
+    _bsbv_delta = float(pivot_r2.loc["best_single_by_val", "Δ (6-5)"])
+    _bsbv_txt = f"({_bsbv_delta:+.3f})"
+else:
+    _bsbv_txt = ""
+
 st.caption(
     "**Reading the Δ column:** positive = adding TFT to the pool helped this "
     "method; negative = TFT dragged the method down. Ridge is the fragile case "
     "(learns pathological sign-flips on TFT). NNLS and weighted-avg-valr2 both "
     "have non-negativity guardrails and degrade gracefully. `best_single_by_val` "
-    "IMPROVES the most from adding TFT (+ ≈ 0.19) — TFT wins several crops "
+    f"improves from adding TFT {_bsbv_txt} — TFT wins several crops "
     "individually, so per-crop selection benefits directly from having it available."
 )
 
@@ -260,7 +269,7 @@ st.caption(
     f"**{n_wins}/{len(showdown)}** crops; it rescues **{n_rescues}** crop(s) "
     "where the val-best single model scored negative on the test set "
     "(meaning validation picked a model that failed to generalize to "
-    "2022-23)."
+    "2024-25)."
 )
 
 # --------------------------------------------------------------------------- #
@@ -353,10 +362,10 @@ if not coef.empty:
 st.markdown("---")
 st.caption(
     "**Methodology:** 5 base models (xgboost / dlinear / itransformer / "
-    "lstm / patchtst) predict on the 2021 validation split. Six fusion "
+    "lstm / patchtst) predict on the 2023 validation split. Six fusion "
     "approaches are then applied — ridge / NNLS / simple average / "
     "weighted average / median — and compared to the 'best single model "
-    "by validation' baseline on the 2022-23 test split. TFT excluded "
+    "by validation' baseline on the 2024-25 test split. TFT excluded "
     "(broken checkpoint). Raw predictions are cached at "
     "`results/metrics/fusion_predictions_{val,test}.parquet` so re-runs "
     "of `scripts/07_fusion.py` are seconds, not 50-80 minutes."

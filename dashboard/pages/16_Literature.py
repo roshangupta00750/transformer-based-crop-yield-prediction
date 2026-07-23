@@ -287,7 +287,7 @@ fig.update_layout(height=420,
 fig.add_vline(x=0, line_dash="dot", line_color="grey")
 st.plotly_chart(fig, width="stretch")
 st.caption(
-    "Blue dot = our best model's R² for the crop on the 2022-2023 test set. "
+    "Blue dot = our best model's R² for the crop on the 2024-2025 test set. "
     "Grey bar = published literature range (lowest to highest reported R² "
     "across the curated studies)."
 )
@@ -311,7 +311,7 @@ k1, k2, k3 = st.columns(3)
 with k1:
     kpi("Our best model", str(our_row["our_best_model"]).upper())
 with k2:
-    kpi("Our R² (2022-23 test)", f"{our_row['our_r2']:.3f}")
+    kpi("Our R² (2024-25 test)", f"{our_row['our_r2']:.3f}")
 with k3:
     kpi("Our RMSE (dt/ha)", f"{our_row['our_rmse']:.1f}")
 

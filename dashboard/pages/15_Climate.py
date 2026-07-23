@@ -3,7 +3,7 @@
 Reads ``results/metrics/counterfactual_daily_summary.csv`` and
 ``counterfactual_daily_district.csv`` (from ``scripts/13_counterfactual_daily.py``).
 Applies additive tasmax/tasmin deltas + multiplicative pr/rsds deltas to
-the 2022-23 observed daily features, then feeds each perturbed feature set
+the 2024-25 observed daily features, then feeds each perturbed feature set
 into the existing daily-trained models. Reports predicted yield anomaly
 per (model, crop, scenario).
 
@@ -26,14 +26,38 @@ st.set_page_config(page_title="Climate counterfactual — Crop Yield Benchmark",
                    layout="wide")
 page_header("Climate counterfactual (CMIP6 SSP2-4.5 / SSP5-8.5)",
             "Delta-method: apply (SSP future window - historical baseline) "
-            "climate deltas to 2022-23 observed features, predict with the "
+            "climate deltas to 2024-25 observed features, predict with the "
             "existing daily-trained models.")
+
+# Compute per-model SSP5-8.5 deltas live from the current counterfactual CSV,
+# so the TL;DR + detail blocks below never drift from the underlying numbers.
+_cc_path = METRICS_DIR / "counterfactual_daily_summary.csv"
+if _cc_path.exists():
+    _cc = pd.read_csv(_cc_path)
+    _ssp5 = _cc[_cc["scenario"] == "ssp5_8_5"]
+    _per_model_5 = _ssp5.groupby("model")["delta_pct"].mean().round(2)
+    _tas5 = float(_ssp5["tasmax_delta_C"].iloc[0]) if len(_ssp5) else float("nan")
+    _tas2 = float(_cc[_cc["scenario"] == "ssp2_4_5"]["tasmax_delta_C"].iloc[0]) \
+        if (_cc["scenario"] == "ssp2_4_5").any() else float("nan")
+    _min_model = _per_model_5.idxmin()
+    _max_model = _per_model_5.idxmax()
+    _min_val = _per_model_5.min()
+    _max_val = _per_model_5.max()
+    _per_model_str = ", ".join(f"{m} ({v:+.2f}%)" for m, v in _per_model_5.items())
+else:
+    _per_model_5 = pd.Series(dtype=float)
+    _tas5 = _tas2 = float("nan")
+    _min_model = _max_model = "—"
+    _min_val = _max_val = float("nan")
+    _per_model_str = "counterfactual CSV missing"
 
 st.markdown(
     "### TL;DR\n\n"
-    "Under SSP5-8.5 warming, the 6 models diverge from -0.43 % (DLinear) "
-    "to +0.60 % (LSTM) predicted yield change — cross-model disagreement "
-    "itself is a free out-of-distribution uncertainty signal."
+    f"Under SSP5-8.5 warming ({_tas5:+.2f} °C growing-season tasmax delta), "
+    f"the 6 models diverge from {_min_val:+.2f}% ({_min_model}) "
+    f"to {_max_val:+.2f}% ({_max_model}) predicted yield change — "
+    "cross-model disagreement itself is a free out-of-distribution "
+    "uncertainty signal."
 )
 
 with st.expander("More details — CMIP6 ensemble caveat & interpretation",
@@ -46,29 +70,24 @@ with st.expander("More details — CMIP6 ensemble caveat & interpretation",
     st.info(
         "**Three-model CMIP6 ensemble caveat.** We use a 3-model ensemble "
         "(EC-Earth3-CC + MPI-ESM1-2-LR + MRI-ESM2-0, all r1i1p1f1). "
-        "Ensemble-mean growing-season tasmax delta under SSP5-8.5 is "
-        "**+0.58 °C** (SSP2-4.5: +0.79 °C), stronger than the previous "
-        "2-model ensemble (+0.20 °C) after MRI-ESM2-0 pulled the mean "
-        "toward its individual +1.8 °C signal. Still below the IPCC AR6 "
-        "multi-model multi-realization mean (~+1.5-2 °C by 2050); "
-        "multi-realization analysis is left for future work. Note that "
-        "MRI-ESM2-0 is the only member showing the expected SSP5-8.5 > "
-        "SSP2-4.5 warming ordering for Germany in this window — the "
-        "ensemble mean is dragged flatter by internal variability in the "
-        "other two single-realization runs."
+        f"Ensemble-mean growing-season tasmax delta under SSP5-8.5 is "
+        f"**{_tas5:+.2f} °C** (SSP2-4.5: {_tas2:+.2f} °C). "
+        "Still below the IPCC AR6 multi-model multi-realization mean "
+        "(~+1.5-2 °C by 2050); multi-realization analysis is left for "
+        "future work. Note that MRI-ESM2-0 is the only member showing the "
+        "expected SSP5-8.5 > SSP2-4.5 warming ordering for Germany in "
+        "this window — the ensemble mean is dragged flatter by internal "
+        "variability in the other two single-realization runs."
     )
     st.info(
-        "**Cross-model disagreement itself IS the finding.** Under "
-        "SSP5-8.5 climate perturbation, LSTM (+0.60%) and iTransformer "
-        "(+0.28%) show the largest yield lift; PatchTST (+0.06%), "
-        "XGBoost (-0.02%), and TFT (0.00%) are near-insensitive; "
-        "DLinear (-0.43%) has the largest response but in the opposite "
-        "direction — linear projection extrapolates deleteriously under "
-        "out-of-distribution weather. The spread from -0.43% to +0.60% "
-        "is a **free out-of-distribution uncertainty signal** — no "
-        "explicit Bayesian machinery required. Tree splits and TFT's "
-        "variable-selection head both damp small input perturbations; "
-        "recurrent gating (LSTM) preserves them best."
+        "**Cross-model disagreement itself IS the finding.** Per-model "
+        f"predicted yield change under SSP5-8.5: {_per_model_str}. "
+        f"Spread from {_min_val:+.2f}% ({_min_model}) to "
+        f"{_max_val:+.2f}% ({_max_model}) is a **free "
+        "out-of-distribution uncertainty signal** — no explicit Bayesian "
+        "machinery required. Trees and attention models with explicit "
+        "variable selection tend to damp small input perturbations; "
+        "recurrent architectures preserve them more."
     )
 
 summary_path = METRICS_DIR / "counterfactual_daily_summary.csv"
@@ -214,7 +233,7 @@ if not district.empty:
         & (district["scenario"] == d_sel_scen)
     ]
     if not sub.empty:
-        # Average across 2022-23 predictions per district
+        # Average across 2024-25 predictions per district
         agg = sub.groupby("landkreis").agg(
             baseline=("pred_baseline", "mean"),
             counterfactual=("pred_counterfactual", "mean"),
@@ -254,7 +273,7 @@ st.caption(
     "**Methodology:** CMIP6 3-model ensemble (EC-Earth3-CC + MPI-ESM1-2-LR "
     "+ MRI-ESM2-0, all r1i1p1f1), monthly output. Historical baseline "
     "2003-2014, future window 2046-2050. Delta method: ensemble-mean "
-    "monthly deltas applied to daily 2022-23 features (additive for "
+    "monthly deltas applied to daily 2024-25 features (additive for "
     "tasmax/tasmin, multiplicative for pr/rsds — the latter sidesteps "
     "the DWD J/cm²/day vs CMIP6 W/m² unit mismatch). Regenerate: "
     "`python scripts/09_cmip6_pull.py --model <name> && python scripts/"

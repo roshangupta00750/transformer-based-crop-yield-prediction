@@ -5,7 +5,7 @@ that with full retraining would cost ~150+ hours on CPU for all six
 models. So the page surfaces two complementary views:
 
 1. **Per-district test R² for all 6 models** — no retraining, just slicing
-   the 2022-2023 test predictions by district. Measures which districts
+   the 2024-2025 test predictions by district. Measures which districts
    each model finds hard.
 2. **True LOO for XGBoost** — the methodology-anchor: 50 folds with each
    district fully removed from training. The remaining models would need

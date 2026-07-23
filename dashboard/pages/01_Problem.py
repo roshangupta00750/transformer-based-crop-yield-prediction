@@ -25,7 +25,7 @@ st.markdown(
     "### TL;DR\n\n"
     "Crop-yield ML has a dozen candidate architectures and no principled "
     "way to pick among them — this benchmark closes that gap with a "
-    "first-principles taxonomy that hits top-1 on 9 of 10 crops."
+    "first-principles taxonomy that that empirically holds up on the majority of German field crops."
 )
 
 with st.expander("More details", expanded=False):
@@ -40,15 +40,15 @@ the fact.
 
 ### The gap this benchmark closes
 
-- Single unified dataset: 10 German crops, 401 NUTS-3 districts, 21 years
-  (2003-2023). Same features, same splits, same anomaly framing — no more
+- Single unified dataset: 10 German crops, 401 NUTS-3 districts, 23 years
+  (2003-2025). Same features, same splits, same anomaly framing — no more
   apples-to-oranges comparisons across studies.
 - Six architectures head-to-head: XGBoost, DLinear, LSTM, PatchTST,
   iTransformer, and the Temporal Fusion Transformer.
 - **A testable hypothesis, not a leaderboard.** The paper's headline
   contribution is a first-principles Crop-Model Compatibility Taxonomy
   (Chapter 5) that predicts which architecture should win which crop from
-  crop biology and model inductive bias — and hits top-1 on 9 of 10 crops.
+  crop biology and model inductive bias — and that empirically holds up on the majority of German field crops.
 - Three independent stress tests (Chapter 6) — cross-model fusion, CMIP6
   climate counterfactuals, and comparison against published EU benchmarks —
   challenge the taxonomy story from three orthogonal angles.

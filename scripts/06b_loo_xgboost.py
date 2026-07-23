@@ -93,7 +93,10 @@ def main() -> None:
                                                 "ndvi", "evi", "lai", "ndwi"))],
                 static=[c for c in df_train.columns
                         if c in ("sand", "clay", "soc", "ph", "bulk_density",
-                                 "landkreis_id")],
+                                 "landkreis_id")
+                        or c.startswith(("elevation_", "slope_", "aspect_",
+                                         "frac_", "sos_", "eos_", "los_",
+                                         "peak_", "amplitude_", "auc_"))],
                 known_future=[c for c in df_train.columns
                               if c in ("sin_doy", "cos_doy")],
             )

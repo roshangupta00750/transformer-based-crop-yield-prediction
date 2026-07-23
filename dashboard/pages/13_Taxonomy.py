@@ -29,31 +29,8 @@ page_header("Crop-Model Compatibility Taxonomy",
             "win — based on crop biology and model inductive biases. "
             "Empirically validated against the benchmark.")
 
-st.markdown(
-    "### TL;DR\n\n"
-    "A first-principles crop-model taxonomy correctly picks the winning "
-    "model on 9 of 10 crops (top-3 on all 10) with mean Spearman ρ = 0.69 "
-    "— the benchmark is a hypothesis test, not a leaderboard."
-)
-
-with st.expander("More details", expanded=False):
-    st.caption(
-        "The paper's headline contribution — a first-principles taxonomy "
-        "that predicts which architecture wins which crop from crop biology "
-        "and model inductive bias, hitting top-1 on 9 of 10 crops and "
-        "top-3 on all 10."
-    )
-    st.info(
-        "**How this differs from typical ML benchmark studies.** Most "
-        "benchmarks report *which model won each crop* — descriptive. This "
-        "taxonomy makes a *testable prediction from first principles* "
-        "(crop phenology × model inductive bias) and then validates it "
-        "against the benchmark. That reframes the empirical study from "
-        "*engineering exercise* to *taxonomic hypothesis test.*"
-    )
-
 # --------------------------------------------------------------------------- #
-# Load
+# Load (needed before TL;DR so headline numbers stay in sync with the CSVs)
 # --------------------------------------------------------------------------- #
 tax_path = PROJECT_ROOT / "configs" / "taxonomy.yaml"
 val_path = METRICS_DIR / "taxonomy_validation.csv"
@@ -72,10 +49,8 @@ val = pd.read_csv(val_path)
 ranks = pd.read_csv(rank_path) if rank_path.exists() else pd.DataFrame()
 
 # --------------------------------------------------------------------------- #
-# Headline KPIs
+# Compute headline metrics (used by TL;DR + KPI row below)
 # --------------------------------------------------------------------------- #
-divider("Headline: does the taxonomy predict the winners?")
-
 n = len(val)
 hit1 = int(val["hit_at_1"].sum())
 hit3 = int(val["hit_at_3"].sum())
@@ -88,6 +63,38 @@ if not ranks.empty:
     mean_rho = float(per_crop_rho.mean())
 else:
     mean_rho = float("nan")
+
+_rho_str = f"{mean_rho:.2f}" if mean_rho == mean_rho else "—"
+_top3_str = f"all {n}" if hit3 == n else f"{hit3} of {n}"
+
+st.markdown(
+    "### TL;DR\n\n"
+    f"A first-principles crop-model taxonomy correctly picks the winning "
+    f"model on {hit1} of {n} crops (top-3 on {_top3_str}) with mean "
+    f"Spearman ρ = {_rho_str} "
+    "— the benchmark is a hypothesis test, not a leaderboard."
+)
+
+with st.expander("More details", expanded=False):
+    st.caption(
+        "The paper's headline contribution — a first-principles taxonomy "
+        "that predicts which architecture wins which crop from crop biology "
+        f"and model inductive bias, hitting top-1 on {hit1} of {n} crops and "
+        f"top-3 on {_top3_str}."
+    )
+    st.info(
+        "**How this differs from typical ML benchmark studies.** Most "
+        "benchmarks report *which model won each crop* — descriptive. This "
+        "taxonomy makes a *testable prediction from first principles* "
+        "(crop phenology × model inductive bias) and then validates it "
+        "against the benchmark. That reframes the empirical study from "
+        "*engineering exercise* to *taxonomic hypothesis test.*"
+    )
+
+# --------------------------------------------------------------------------- #
+# Headline KPIs
+# --------------------------------------------------------------------------- #
+divider("Headline: does the taxonomy predict the winners?")
 
 k1, k2, k3, k4 = st.columns(4)
 with k1: kpi("Crops covered", f"{n}")
