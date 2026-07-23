@@ -57,7 +57,10 @@ OUT_DISTRICT = ROOT / "results" / "metrics" / "climate_counterfactual_district.c
 GROWING_MONTHS = list(range(3, 9))     # March-August
 SEASON_TAG = "MarAug"
 
-WEATHER_VARS = ["tas", "tasmax", "tasmin", "pr", "rsds"]
+# Deliberately exclude rsds/radiation: the observed DWD radiation channel is
+# absent for most model districts, so a learned radiation response would
+# largely be a response to imputation artefacts.
+WEATHER_VARS = ["tas", "tasmax", "tasmin", "pr"]
 SOIL_VARS = ["bulk_density", "clay", "ph", "sand", "soc"]
 
 TRAIN_YEARS = list(range(2003, 2021))

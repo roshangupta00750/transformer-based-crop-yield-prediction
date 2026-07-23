@@ -2,11 +2,12 @@
 
 Pipeline order:
   1. Read unified parquet, filter to crop(s).
-  2. Apply phenology window from data.yaml (per-crop growing season).
+  2. Apply phenology window and minimum sequence-coverage policy.
   3. Make temporal split: train ≤ train_end_year, val, test.
-  4. Fit FeaturePipeline on TRAIN ONLY (z-score features, anomaly-frame target).
-  5. Transform features for all splits, build CropYieldDataset.
-  6. Train; save model checkpoint + pipeline JSON.
+  4. Select leakage-safe features from data.yaml.
+  5. Fit FeaturePipeline on TRAIN ONLY (z-score features, anomaly-frame target).
+  6. Transform features for all splits, build CropYieldDataset.
+  7. Train; save model checkpoint + pipeline JSON.
 
 Usage:
     python scripts/03_train.py --model lstm
@@ -25,8 +26,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.data import make_temporal_split
 from src.data.dataset import (
-    CropYieldDataset, FeaturePipeline, FeatureSpec, apply_phenology_window,
-    collate_pad,
+    CropYieldDataset, FeaturePipeline, build_feature_spec, collate_pad,
+    prepare_modeling_frame, require_current_dataset_policy,
 )
 from src.models import build_model
 from src.training import Trainer
@@ -34,24 +35,6 @@ from src.utils import (get_logger, load_data_config, load_experiment_config,
                        load_model_config, pick_device, set_seed, PROJECT_ROOT)
 
 log = get_logger("train")
-
-
-CANDIDATE_PAST = [
-    "temperature_air_max_2m", "temperature_air_min_2m",
-    "precipitation_height", "radiation_global", "humidity",
-    "ndvi", "evi", "lai", "ndwi",
-]
-CANDIDATE_FUTURE = ["sin_doy", "cos_doy"]
-CANDIDATE_STATIC = [
-    # soil (original)
-    "sand", "clay", "soc", "ph", "bulk_density", "landkreis_id",
-    # DEM (COP-DEM GLO-90 → EPSG:3035 → zonal stats)
-    "elevation_mean", "elevation_std", "elevation_min", "elevation_max",
-    "slope_mean", "slope_std", "aspect_cos_mean", "aspect_sin_mean",
-    # phenology proxy (scipy double-logistic fit on backfilled NDVI, per year)
-    "sos_doy", "eos_doy", "los_days", "peak_doy",
-    "peak_ndvi", "amplitude_ndvi", "auc_growing",
-]
 
 
 def main() -> None:
@@ -78,6 +61,11 @@ def main() -> None:
         log.error("Unified dataset missing at %s — run scripts/02_preprocess.py first.",
                   unified)
         sys.exit(1)
+    try:
+        require_current_dataset_policy(unified)
+    except RuntimeError as e:
+        log.error("%s", e)
+        sys.exit(1)
 
     df = pd.read_parquet(unified)
     if args.crop:
@@ -86,8 +74,15 @@ def main() -> None:
              len(df), df["landkreis"].nunique(), df["crop"].nunique(),
              df["year"].nunique())
 
-    df = apply_phenology_window(df, data_cfg["phenology"])
-    log.info("After phenology windowing: %d rows", len(df))
+    rows_before_quality = len(df)
+    df = prepare_modeling_frame(df, data_cfg)
+    log.info(
+        "After crop window + %.0f%% sequence coverage filter: %d rows "
+        "(dropped %d)",
+        100 * data_cfg["quality"]["min_sequence_coverage"],
+        len(df),
+        rows_before_quality - len(df),
+    )
 
     split = make_temporal_split(
         df,
@@ -100,14 +95,12 @@ def main() -> None:
     log.info("Split sizes: train=%d, val=%d, test=%d",
              len(df_train), len(df_val), len(split.test))
 
-    # Per-model static override (lstm.yaml sets this to just the 6 soil statics;
-    # broadcasting all 21 to every timestep diluted its temporal signal — LSTM
-    # regressed 0.208 vs samal-era. Other models use the full CANDIDATE_STATIC.)
-    static_pool = model_cfg.get("static_features", CANDIDATE_STATIC)
-    spec = FeatureSpec(
-        past_observed=[c for c in CANDIDATE_PAST if c in df.columns],
-        static=[c for c in static_pool if c in df.columns],
-        known_future=[c for c in CANDIDATE_FUTURE if c in df.columns],
+    # Per-model static overrides are still passed through the global exclusion
+    # policy, so a model cannot accidentally re-enable a leaking feature.
+    spec = build_feature_spec(
+        df,
+        data_cfg,
+        static_features=model_cfg.get("static_features"),
     )
     log.info("Features: past=%s, static=%s, future=%s",
              spec.past_observed, spec.static, spec.known_future)

@@ -9,11 +9,12 @@ batch_size: 128
 # LSTM broadcasts statics to every timestep. Adding the 15 land-eng features
 # on top of the original 6 diluted the temporal signal (regression 0.502 →
 # 0.294 on julia2 vs samal). Keep LSTM restricted to the original 6 soil +
-# landkreis statics; other models still get all 21 via CANDIDATE_STATIC.
+# landkreis statics; other models use the safe static list in data.yaml.
 static_features:
   - sand
   - clay
   - soc
   - ph
   - bulk_density
+  - soil_imputed
   - landkreis_id

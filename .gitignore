@@ -9,6 +9,7 @@ data/processed/*
 
 # ── Exceptions: bundle these small processed artefacts ──────────────
 !data/processed/dataset.parquet
+!data/processed/dataset.policy.json
 !data/processed/cmip6_nuts3.parquet
 
 # Bundle the fused-model prediction caches (small; recomputing needs
@@ -20,6 +21,7 @@ data/processed/*
 results/checkpoints/
 !results/checkpoints/*.pipeline.json
 results/metrics/*.json
+!results/metrics/feature_policy.json
 results/figures/*.png
 results/figures/*.pdf
 !results/figures/.gitkeep
@@ -66,3 +68,4 @@ data/processed/dataset.pre_land.*.parquet
 results/checkpoints_archive/
 results/checkpoints/_pre_landfeatures_*/
 results/logs/
+*.py.bak

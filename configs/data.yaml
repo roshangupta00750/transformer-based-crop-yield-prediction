@@ -27,6 +27,77 @@ landkreise: "all"
 weather_freq: "D"               # pandas freq string
 satellite_composite_days: 10    # 10-day NDVI/EVI/LAI composites
 
+# ---- Leakage-safe model features -----------------------------------------
+# This is the single source of truth for training and evaluation. Features
+# omitted here are not passed to a model even when present in dataset.parquet.
+features:
+  past_observed:
+    - temperature_air_max_2m
+    - temperature_air_min_2m
+    - precipitation_height
+    - humidity
+    - ndvi
+    - evi
+    - lai
+    - ndwi
+    # Available after rebuilding the interim/processed data with the updated
+    # cleaners. These expose imputation instead of silently hiding it.
+    - temperature_air_max_2m_missing
+    - temperature_air_min_2m_missing
+    - precipitation_height_missing
+    - humidity_missing
+    - ndvi_observed
+    - evi_observed
+    - lai_observed
+    - ndwi_observed
+    - ndvi_stale
+    - evi_stale
+    - lai_stale
+    - ndwi_stale
+    - ndvi_age_days
+    - evi_age_days
+    - lai_age_days
+    - ndwi_age_days
+  static:
+    - sand
+    - clay
+    - soc
+    - ph
+    - bulk_density
+    - soil_imputed
+    - landkreis_id
+    - elevation_mean
+    - elevation_std
+    - elevation_max
+    - slope_mean
+    - slope_std
+    - aspect_cos_mean
+    - aspect_sin_mean
+  known_future:
+    - sin_doy
+    - cos_doy
+  excluded:
+    # 90.5% missing in the source weather table; constant-imputed for most
+    # districts in the current processed dataset.
+    - radiation_global
+    # Same-year full-season NDVI summaries use observations after early-season
+    # prediction cutoffs (and sometimes after harvest), so they leak the future.
+    - sos_doy
+    - eos_doy
+    - los_days
+    - peak_doy
+    - peak_ndvi
+    - amplitude_ndvi
+    - auc_growing
+    # COP-DEM coastline/raster artefacts produced impossible district minima.
+    - elevation_min
+
+# Reject crop sequences that contain less than this fraction of their expected
+# configured growing-season days. Applied before train/val/test splitting and
+# before any in-season cutoff.
+quality:
+  min_sequence_coverage: 0.90
+
 # ---- Phenology window (per crop, used to slice the time series) ---------
 # Approximate German growing-season start/end (DOY = day of year).
 # Winter crops: sowing_doy > harvest_doy (sown previous autumn, harvested

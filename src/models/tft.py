@@ -165,11 +165,10 @@ class TFTModel(BaseModel):
         df_tr = reconstruct(ds)
         df_v = reconstruct(val_loader.dataset) if val_loader is not None else None
 
-        soil_cols = [c for c in df_tr.columns
-                     if c in ("sand", "clay", "soc", "ph", "bulk_density")]
-        weather_sat_cols = [c for c in df_tr.columns
-                            if c.startswith(("temperature_", "precip", "radiation",
-                                             "humid", "ndvi", "evi", "lai", "ndwi"))]
+        # Use the already validated FeatureSpec from the common training path.
+        # Prefix-based discovery previously re-enabled radiation accidentally.
+        soil_cols = list(ds.spec.static)
+        weather_sat_cols = list(ds.spec.past_observed)
 
         return self.fit_from_df(
             df_train=df_tr, df_val=df_v,

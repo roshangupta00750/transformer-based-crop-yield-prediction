@@ -49,7 +49,10 @@ def _predict_test_set_tft(crop: str,
     """
     try:
         from pytorch_forecasting import TemporalFusionTransformer, TimeSeriesDataSet
-        from src.data.dataset import apply_phenology_window
+        from src.data.dataset import (
+            build_feature_spec, prepare_modeling_frame,
+            require_current_dataset_policy,
+        )
         from src.training.tft_adapter import (build_timeseries_dataset,
                                               prepare_tft_dataframe)
         from src.utils import load_data_config
@@ -57,20 +60,34 @@ def _predict_test_set_tft(crop: str,
         return pd.DataFrame(), {"error": f"TFT eval imports failed: {e}"}
 
     data_cfg = load_data_config()
+    try:
+        require_current_dataset_policy(
+            PROJECT_ROOT / data_cfg["paths"]["unified_dataset"]
+        )
+    except RuntimeError as e:
+        return pd.DataFrame(), {"error": str(e)}
     df_all = load_unified()
     if df_all.empty:
         return pd.DataFrame(), {"error": "Unified dataset not found."}
-    df_all = apply_phenology_window(df_all, data_cfg["phenology"])
+    df_all = prepare_modeling_frame(df_all, data_cfg)
+
+    safe_pipeline = load_pipeline("tft")
+    if safe_pipeline is None:
+        return pd.DataFrame(), {
+            "error": "TFT pipeline missing — retrain under the safe feature policy."
+        }
+    try:
+        safe_pipeline.require_current_feature_policy()
+    except RuntimeError as e:
+        return pd.DataFrame(), {"error": str(e)}
 
     train_end = data_cfg["splits"]["temporal"]["train_end_year"]
     test_years = years if years is not None else \
         data_cfg["splits"]["temporal"]["test_years"]
 
-    soil_cols = [c for c in df_all.columns
-                 if c in ("sand", "clay", "soc", "ph", "bulk_density")]
-    weather_sat_cols = [c for c in df_all.columns
-                        if c.startswith(("temperature_", "precip", "radiation",
-                                         "humid", "ndvi", "evi", "lai", "ndwi"))]
+    safe_spec = build_feature_spec(df_all, data_cfg)
+    soil_cols = safe_spec.static
+    weather_sat_cols = safe_spec.past_observed
 
     # IMPORTANT: build train_ds on ALL crops the model was trained on, so the
     # categorical encoders + GroupNormalizer match the checkpoint. Filtering to
@@ -203,21 +220,33 @@ def _predict_test_set(model: str, crop: str,
     pipeline = load_pipeline(model)
     if pipeline is None:
         return pd.DataFrame(), {"error": "Pipeline JSON missing — train first."}
+    try:
+        pipeline.require_current_feature_policy()
+    except RuntimeError as e:
+        return pd.DataFrame(), {"error": str(e)}
 
-    from src.data.dataset import (CropYieldDataset, apply_phenology_window,
-                                  collate_pad)
+    from src.data.dataset import (
+        CropYieldDataset, collate_pad, prepare_modeling_frame,
+        require_current_dataset_policy,
+    )
     from src.models import build_model
     from src.utils import load_data_config, load_model_config
     from torch.utils.data import DataLoader
 
     data_cfg = load_data_config()
     model_cfg = load_model_config(model)
+    try:
+        require_current_dataset_policy(
+            PROJECT_ROOT / data_cfg["paths"]["unified_dataset"]
+        )
+    except RuntimeError as e:
+        return pd.DataFrame(), {"error": str(e)}
 
     df = load_unified()
     if df.empty:
         return pd.DataFrame(), {"error": "Unified dataset not found."}
     df = df[df["crop"] == crop]
-    df = apply_phenology_window(df, data_cfg["phenology"])
+    df = prepare_modeling_frame(df, data_cfg)
     target_years = years if years is not None else \
         data_cfg["splits"]["temporal"]["test_years"]
     df_test = df[df["year"].isin(target_years)]

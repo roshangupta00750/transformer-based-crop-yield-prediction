@@ -1,10 +1,16 @@
 # Crop Yield Benchmark — German NUTS-3
 
 An open, reproducible benchmark for multi-crop yield prediction covering
-**ten crops × 401 German NUTS-3 districts × 21 years** (2003–2023) with
+**ten crops × 282 modeled German NUTS-3 districts × 23 years** (2003–2025) with
 six deep-learning architectures head-to-head, cross-model fusion, a
 first-principles **crop-model compatibility taxonomy**, and a CMIP6
 climate stress test.
+
+> **Data-quality notice:** a source-level audit introduced feature-policy v3.
+> Bundled checkpoints and headline metrics created under the earlier policy
+> are legacy results and must not be reported as final. Retrain before using
+> the leaderboard: full-year phenology summaries leaked future observations,
+> and the DWD radiation feature was missing for most districts.
 
 **Institution:** Julius-Maximilians-Universität Würzburg, Institut für Informatik.
 **Praktikum project.**
@@ -15,8 +21,8 @@ climate stress test.
 
 | Layer | Contents |
 |---|---|
-| **Dataset** | 15.4 M daily rows of DWD weather + MODIS NDVI/EVI + SoilGrids soil + Destatis yield + GISCO NUTS-3 shapefile, unified per (`landkreis`, `crop`, `date`). Bundled `data/processed/dataset.parquet` (46 MB). |
-| **Models** | XGBoost, DLinear, LSTM, PatchTST, iTransformer, TFT — one training script, uniform preprocessing, temporal split (train ≤2020, val 2021, test 2022-2023). |
+| **Dataset** | 16.56 M daily rows of DWD weather + MODIS NDVI/EVI/LAI + SoilGrids soil + Destatis yield, producing about 45,000 quality-filtered (`landkreis`, `crop`, `year`) sequences. |
+| **Models** | XGBoost, DLinear, LSTM, PatchTST, iTransformer, TFT — one safe feature policy, temporal split (train ≤2022, val 2023, test 2024-2025). |
 | **Fusion** | Six methods (Ridge, NNLS, simple mean, weighted-by-val-R², median, best-single-by-val) with per-crop selection analysis. |
 | **Taxonomy** | `configs/taxonomy.yaml`: a-priori compatibility hypothesis mapping crop biology (phenology, critical windows) to model inductive biases (temporal receptive field, feature interaction order). |
 | **Climate stress** | CMIP6 counterfactuals under SSP2-4.5 and SSP5-8.5 (EC-Earth3-CC + MPI-ESM1-2-LR) via delta method on 2022-23 features. |
@@ -25,6 +31,10 @@ climate stress test.
 ---
 
 ## Headline finding
+
+The figures below describe the legacy v1 run and are retained only for
+reproducibility. They must be regenerated under feature-policy v3 before they
+are treated as project findings.
 
 The compatibility taxonomy makes an a-priori prediction about which model
 architecture should win each of the ten crops based on crop biology and
@@ -94,6 +104,20 @@ python scripts/14_taxonomy_validate.py
 # 5. Climate counterfactual.
 python scripts/13_counterfactual_daily.py
 ```
+
+### Feature-policy v3 safeguards
+
+- `radiation_global` is excluded until consistent district coverage is available.
+- Same-year `sos/eos/peak/amplitude/AUC` summaries remain available for
+  descriptive analysis but are excluded from prediction.
+- Crop sequences below 90% of the configured growing-season days are removed.
+- Updated cleaners emit soil-imputation flags plus satellite observation-age
+  and stale-value flags. Carry-forward values expire after their expected
+  composite window; remaining missing values use training-only means.
+- Existing pre-v3 checkpoints are rejected by evaluation code. Rebuild the data,
+  retrain all models, and regenerate metrics to publish corrected results.
+- The dashboard hides headline metrics until a complete safe multicrop
+  evaluation writes `results/metrics/feature_policy.json`.
 
 **Streamlit Cloud deploy?**
 The repo is Cloud-ready: `.streamlit/config.toml` is preconfigured,

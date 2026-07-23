@@ -1,0 +1,103 @@
+"""Tests for the leakage-safe data policy."""
+from __future__ import annotations
+
+import pandas as pd
+
+from src.data.acquisition.gee_satellite import clean as clean_satellite
+from src.data.dataset import (
+    build_feature_spec,
+    filter_incomplete_sequences,
+)
+from src.utils import load_data_config
+
+
+def test_unsafe_features_are_excluded() -> None:
+    cfg = load_data_config()
+    columns = {
+        "temperature_air_max_2m": [10.0],
+        "precipitation_height": [1.0],
+        "radiation_global": [1000.0],
+        "ndvi": [0.5],
+        "sos_doy": [80.0],
+        "eos_doy": [300.0],
+        "auc_growing": [150.0],
+        "elevation_min": [-289.0],
+        "sand": [300.0],
+        "sin_doy": [0.0],
+        "cos_doy": [1.0],
+    }
+    spec = build_feature_spec(pd.DataFrame(columns), cfg)
+    selected = set(spec.past_observed + spec.static + spec.known_future)
+
+    assert "temperature_air_max_2m" in selected
+    assert "ndvi" in selected
+    assert "radiation_global" not in selected
+    assert "sos_doy" not in selected
+    assert "eos_doy" not in selected
+    assert "auc_growing" not in selected
+    assert "elevation_min" not in selected
+
+
+def test_model_override_cannot_reenable_leaking_static() -> None:
+    cfg = load_data_config()
+    df = pd.DataFrame({"sand": [300.0], "sos_doy": [80.0]})
+    spec = build_feature_spec(
+        df,
+        cfg,
+        static_features=["sand", "sos_doy"],
+    )
+    assert spec.static == ["sand"]
+
+
+def test_incomplete_sequences_are_removed() -> None:
+    phenology = {
+        "test_crop": {
+            "sowing_doy": 2,
+            "harvest_doy": 5,
+        }
+    }
+    complete = pd.DataFrame(
+        {
+            "landkreis": "complete",
+            "crop": "test_crop",
+            "year": 2020,
+            "doy": [2, 3, 4, 5],
+        }
+    )
+    incomplete = pd.DataFrame(
+        {
+            "landkreis": "incomplete",
+            "crop": "test_crop",
+            "year": 2020,
+            "doy": [2, 3, 4],
+        }
+    )
+
+    result = filter_incomplete_sequences(
+        pd.concat([complete, incomplete], ignore_index=True),
+        phenology,
+        min_coverage=0.90,
+    )
+    assert result["landkreis"].unique().tolist() == ["complete"]
+
+
+def test_satellite_values_expire_after_composite_window(tmp_path) -> None:
+    raw = pd.DataFrame(
+        {
+            "landkreis": ["A", "A"],
+            "date": pd.to_datetime(["2020-01-01", "2020-02-20"]),
+            "ndvi": [0.2, 0.4],
+            "evi": [0.1, 0.3],
+            "lai": [1.0, 2.0],
+        }
+    )
+    raw_path = tmp_path / "raw.parquet"
+    out_path = tmp_path / "daily.parquet"
+    raw.to_parquet(raw_path, index=False)
+    clean_satellite(raw_path, out_path)
+
+    daily = pd.read_parquet(out_path).set_index("date")
+    stale_day = daily.loc[pd.Timestamp("2020-02-03")]
+    assert stale_day["ndvi_stale"] == 1
+    assert stale_day["ndvi_age_days"] == 33
+    assert pd.isna(stale_day["ndvi"])

@@ -13,7 +13,9 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.data.dataset import FeaturePipeline, apply_phenology_window
+from src.data.dataset import (
+    FeaturePipeline, prepare_modeling_frame, require_current_dataset_policy,
+)
 from src.evaluation.runner import evaluate_at_horizons, save_results
 from src.models import build_model
 from src.utils import (get_logger, load_data_config, load_experiment_config,
@@ -35,10 +37,11 @@ def main() -> None:
     model_cfg = load_model_config(args.model)
 
     unified = PROJECT_ROOT / data_cfg["paths"]["unified_dataset"]
+    require_current_dataset_policy(unified)
     df = pd.read_parquet(unified)
     df = df[df["crop"] == args.crop]
 
-    df = apply_phenology_window(df, data_cfg["phenology"])
+    df = prepare_modeling_frame(df, data_cfg)
     df_test = df[df["year"].isin(data_cfg["splits"]["temporal"]["test_years"])]
     log.info("Test set: %d rows across %d districts × %d years",
              len(df_test), df_test["landkreis"].nunique(), df_test["year"].nunique())
@@ -51,6 +54,7 @@ def main() -> None:
                   pipeline_path)
         sys.exit(1)
     pipeline = FeaturePipeline.load(pipeline_path)
+    pipeline.require_current_feature_policy()
 
     # If the trained pipeline expects district_baseline (absolute-yield track),
     # synthesize the column on the test set using train-time baselines.

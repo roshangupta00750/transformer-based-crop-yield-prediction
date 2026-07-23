@@ -36,8 +36,10 @@ from torch.utils.data import DataLoader
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from src.data.dataset import (CropYieldDataset, FeaturePipeline, FeatureSpec,
-                              apply_phenology_window, collate_pad)
+from src.data.dataset import (
+    CropYieldDataset, FeaturePipeline, build_feature_spec, collate_pad,
+    prepare_modeling_frame, require_current_dataset_policy,
+)
 from src.models.xgboost_model import _flatten_batch, loader_to_xy
 from src.utils import load_data_config, load_model_config
 
@@ -55,8 +57,10 @@ def main() -> None:
     model_cfg = load_model_config("xgboost")
     crops = [args.crop] if args.crop else data_cfg["crops"]
 
-    df_full = pd.read_parquet(ROOT / data_cfg["paths"]["unified_dataset"])
-    df_full = apply_phenology_window(df_full, data_cfg["phenology"])
+    unified = ROOT / data_cfg["paths"]["unified_dataset"]
+    require_current_dataset_policy(unified)
+    df_full = pd.read_parquet(unified)
+    df_full = prepare_modeling_frame(df_full, data_cfg)
 
     train_end = data_cfg["splits"]["temporal"]["train_end_year"]
     test_years = data_cfg["splits"]["temporal"]["test_years"]
@@ -86,20 +90,7 @@ def main() -> None:
                 continue
 
             # Feature spec + pipeline fitted on the leave-one-out training set.
-            spec = FeatureSpec(
-                past_observed=[c for c in df_train.columns
-                               if c.startswith(("temperature_", "precip",
-                                                "radiation", "humid",
-                                                "ndvi", "evi", "lai", "ndwi"))],
-                static=[c for c in df_train.columns
-                        if c in ("sand", "clay", "soc", "ph", "bulk_density",
-                                 "landkreis_id")
-                        or c.startswith(("elevation_", "slope_", "aspect_",
-                                         "frac_", "sos_", "eos_", "los_",
-                                         "peak_", "amplitude_", "auc_"))],
-                known_future=[c for c in df_train.columns
-                              if c in ("sin_doy", "cos_doy")],
-            )
+            spec = build_feature_spec(df_train, data_cfg)
             pipe = FeaturePipeline(spec).fit(df_train)
             df_train_t = pipe.transform_features(df_train)
             df_test_t = pipe.transform_features(df_test)

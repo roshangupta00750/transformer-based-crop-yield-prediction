@@ -28,6 +28,12 @@ log = get_logger("gee")
 
 # Default Cloud project for EE (overridden by env var or explicit arg).
 DEFAULT_PROJECT = "crop-yield-praktikum"
+MAX_COMPOSITE_AGE_DAYS = {
+    "ndvi": 32,  # MOD13Q1: 16-day; tolerate one missed composite
+    "evi": 32,
+    "lai": 16,   # MOD15A2H: 8-day; tolerate one missed composite
+    "ndwi": 8,   # daily source; tolerate a short cloudy gap
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -235,8 +241,12 @@ def download(
 
 
 def clean(raw_path: str | Path, out_path: str | Path) -> Path:
-    """Resample to daily and ffill within each Landkreis so the merge with
-    weather is clean. Output columns: landkreis, date, ndvi, evi, lai, ndwi."""
+    """Resample native composites to daily without hiding their observation age.
+
+    Each index gets ``<index>_observed`` and ``<index>_age_days`` columns.
+    Values are forward-filled causally; leading days before the first native
+    observation remain null and are later filled from train-only statistics.
+    """
     raw_path, out_path = Path(raw_path), Path(out_path)
     df = pd.read_parquet(raw_path)
     if df.empty:
@@ -251,8 +261,23 @@ def clean(raw_path: str | Path, out_path: str | Path) -> Path:
     def _resample(group):
         g = group.set_index("date")[cols].sort_index()
         idx = pd.date_range(g.index.min(), g.index.max(), freq="D")
-        return g.reindex(idx).ffill().bfill().reset_index().rename(
-            columns={"index": "date"})
+        g = g.reindex(idx)
+        for c in cols:
+            observed = g[c].notna()
+            last_observed_date = (
+                pd.Series(g.index, index=g.index)
+                .where(observed)
+                .ffill()
+            )
+            age = (
+                pd.Series(g.index, index=g.index) - last_observed_date
+            ).dt.days
+            max_age = MAX_COMPOSITE_AGE_DAYS[c]
+            g[f"{c}_observed"] = observed.astype("int8")
+            g[f"{c}_stale"] = (age.isna() | age.gt(max_age)).astype("int8")
+            g[f"{c}_age_days"] = age.clip(upper=max_age + 1)
+            g[c] = g[c].ffill().where(age.le(max_age))
+        return g.reset_index().rename(columns={"index": "date"})
 
     out = (df.groupby("landkreis", group_keys=True)
              .apply(_resample, include_groups=False)

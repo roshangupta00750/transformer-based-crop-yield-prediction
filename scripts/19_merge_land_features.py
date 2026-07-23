@@ -17,8 +17,9 @@ Join order (each is a strict LEFT JOIN — dataset row count is preserved):
             <- phenology (on [landkreis, year])
 
 Silent-bug prevention (verbatim from the land-eng workflow synthesis):
-  1. Extend ``CANDIDATE_STATIC`` in ``scripts/03_train.py:45`` — new statics
-     will NOT reach the model otherwise.
+  1. Extend ``features.static`` in ``configs/data.yaml`` for safe new statics.
+     Same-year full-season phenology summaries are intentionally excluded from
+     predictive models because they contain future information.
   2. Mirror at ``scripts/06b_loo_xgboost.py:95`` startswith allowlist —
      new prefixes (elevation_, slope_, aspect_, frac_, sos_, eos_, los_,
      peak_, amplitude_, auc_) must be added or LOO silently drops them.
@@ -220,7 +221,7 @@ def _remind_downstream_edits(new_cols: list[str]) -> None:
     print("\n" + "=" * 72)
     print("REMINDERS — downstream edits required before retraining")
     print("=" * 72)
-    print("  1. scripts/03_train.py:45 CANDIDATE_STATIC — extend with:")
+    print("  1. configs/data.yaml features.static — add only causally safe columns:")
     for c in new_cols:
         print(f"        \"{c}\",")
     print("  2. scripts/06b_loo_xgboost.py:95 static allowlist — replace the")

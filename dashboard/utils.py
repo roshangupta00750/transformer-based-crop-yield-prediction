@@ -51,6 +51,8 @@ METRICS_DIR = PROJECT_ROOT / "results" / "metrics"
 CHECKPOINTS_DIR = PROJECT_ROOT / "results" / "checkpoints"
 FIGURES_DIR = PROJECT_ROOT / "results" / "figures"
 LOGS_DIR = Path("/tmp")
+DATA_POLICY_PATH = PROCESSED.with_suffix(".policy.json")
+RESULTS_POLICY_PATH = METRICS_DIR / "feature_policy.json"
 
 MODELS = ["xgboost", "lstm", "dlinear", "patchtst", "itransformer", "tft"]
 
@@ -135,6 +137,8 @@ def load_unified() -> pd.DataFrame:
 @st.cache_data(ttl=60)
 def load_all_metrics() -> pd.DataFrame:
     """Read every <model>_<crop>_horizons.json under results/metrics/."""
+    if not results_policy_is_current():
+        return pd.DataFrame()
     rows = []
     if not METRICS_DIR.exists():
         return pd.DataFrame()
@@ -191,11 +195,28 @@ def landkreis_label(code: str, name_map: dict[str, str] | None = None) -> str:
     return f"{name} ({code})" if name else str(code)
 
 
+def results_policy_is_current() -> bool:
+    """True only when result artefacts match the processed-data policy."""
+    if not DATA_POLICY_PATH.exists() or not RESULTS_POLICY_PATH.exists():
+        return False
+    try:
+        data_policy = json.loads(DATA_POLICY_PATH.read_text())
+        result_policy = json.loads(RESULTS_POLICY_PATH.read_text())
+        return (
+            int(result_policy["feature_policy_version"])
+            == int(data_policy["feature_policy_version"])
+        )
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+
+
 @st.cache_data(ttl=60)
 def load_multicrop_summary() -> pd.DataFrame:
     """Read `results/metrics/multicrop_summary.csv` — one row per (model, crop)
     with r2, rmse, mae, n. Produced by `scripts/05b_eval_multicrop.py`.
     """
+    if not results_policy_is_current():
+        return pd.DataFrame()
     p = METRICS_DIR / "multicrop_summary.csv"
     if not p.exists():
         return pd.DataFrame()
@@ -239,6 +260,8 @@ def load_taxonomy_validation() -> pd.DataFrame:
     """Read `results/metrics/taxonomy_validation.csv` — one row per crop with
     predicted_primary, observed_best_model, hit_at_1, hit_at_3, etc.
     """
+    if not results_policy_is_current():
+        return pd.DataFrame()
     p = METRICS_DIR / "taxonomy_validation.csv"
     if not p.exists():
         return pd.DataFrame()
@@ -455,4 +478,10 @@ def page_header(title: str, subtitle: str = "") -> None:
     st.markdown(f"## {title}")
     if subtitle:
         st.caption(subtitle)
+    if not results_policy_is_current():
+        st.error(
+            "Model results on this page are legacy pre-policy-v3 artefacts. "
+            "Rebuild, retrain, and run `scripts/05b_eval_multicrop.py` before "
+            "using them as findings."
+        )
     st.markdown("---")

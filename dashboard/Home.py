@@ -21,7 +21,8 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from utils import (divider, kpi, load_all_metrics, load_multicrop_summary,
-                   load_taxonomy_validation, load_unified, METRICS_DIR)
+                   load_taxonomy_validation, load_unified, METRICS_DIR,
+                   results_policy_is_current)
 
 st.set_page_config(
     page_title="Crop Yield Benchmark — JMU Würzburg",
@@ -48,6 +49,15 @@ st.info(
     "flat 19-entry sidebar.",
     icon=None,
 )
+
+if not results_policy_is_current():
+    st.error(
+        "The processed dataset is now feature-policy v3, but the bundled model "
+        "metrics are legacy. They are intentionally hidden to prevent reporting "
+        "leakage-contaminated results. Retrain the models and run "
+        "`python scripts/05b_eval_multicrop.py`."
+    )
+    st.stop()
 
 st.subheader(
     "A first-principles crop-model taxonomy picks the winning architecture "

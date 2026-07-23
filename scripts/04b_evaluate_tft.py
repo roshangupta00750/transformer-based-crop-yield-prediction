@@ -24,7 +24,10 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.data.dataset import apply_phenology_window
+from src.data.dataset import (
+    FeaturePipeline, build_feature_spec, prepare_modeling_frame,
+    require_current_dataset_policy,
+)
 from src.evaluation.metrics import all_metrics
 from src.training.tft_adapter import (build_timeseries_dataset,
                                       prepare_tft_dataframe)
@@ -45,9 +48,10 @@ def main() -> None:
     exp_cfg = load_experiment_config()
 
     unified = PROJECT_ROOT / data_cfg["paths"]["unified_dataset"]
+    require_current_dataset_policy(unified)
     df = pd.read_parquet(unified)
     df = df[df["crop"] == args.crop]
-    df = apply_phenology_window(df, data_cfg["phenology"])
+    df = prepare_modeling_frame(df, data_cfg)
 
     train_end = data_cfg["splits"]["temporal"]["train_end_year"]
     test_years = data_cfg["splits"]["temporal"]["test_years"]
@@ -55,11 +59,9 @@ def main() -> None:
     if df_train.empty:
         log.error("No training data."); sys.exit(1)
 
-    soil_cols = [c for c in df.columns
-                 if c in ("sand", "clay", "soc", "ph", "bulk_density")]
-    weather_sat_cols = [c for c in df.columns
-                        if c.startswith(("temperature_", "precip", "radiation",
-                                         "humid", "ndvi", "evi", "lai", "ndwi"))]
+    spec = build_feature_spec(df, data_cfg)
+    soil_cols = spec.static
+    weather_sat_cols = spec.past_observed
 
     df_tr, cols = prepare_tft_dataframe(
         df_train, soil_cols=soil_cols, weather_sat_cols=weather_sat_cols,
@@ -71,6 +73,11 @@ def main() -> None:
     ckpt = PROJECT_ROOT / exp_cfg["log"]["checkpoints_dir"] / "tft.pt"
     if not ckpt.exists():
         log.error("Missing tft.pt — train first."); sys.exit(1)
+    pipeline_path = ckpt.with_name("tft.pipeline.json")
+    if not pipeline_path.exists():
+        log.error("Missing tft.pipeline.json — retrain under the safe policy.")
+        sys.exit(1)
+    FeaturePipeline.load(pipeline_path).require_current_feature_policy()
     model = TemporalFusionTransformer.load_from_checkpoint(str(ckpt))
     model.eval()
 

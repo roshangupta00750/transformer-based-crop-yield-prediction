@@ -33,6 +33,14 @@ from typing import Sequence
 import numpy as np
 import pandas as pd
 
+FEATURE_POLICY_VERSION = 3
+SATELLITE_MAX_AGE_DAYS = {
+    "ndvi": 32,
+    "evi": 32,
+    "lai": 16,
+    "ndwi": 8,
+}
+
 try:
     import torch
     from torch.utils.data import Dataset
@@ -49,6 +57,63 @@ class FeatureSpec:
     static: list[str]
     known_future: list[str]
     target: str = "yield_dt_per_ha"
+
+
+def dataset_policy_manifest_path(dataset_path: str | Path) -> Path:
+    """Return the sidecar path used to prove safe preprocessing was run."""
+    return Path(dataset_path).with_suffix(".policy.json")
+
+
+def require_current_dataset_policy(dataset_path: str | Path) -> None:
+    """Reject legacy processed data that hid missingness non-causally."""
+    manifest_path = dataset_policy_manifest_path(dataset_path)
+    if not manifest_path.exists():
+        raise RuntimeError(
+            f"{manifest_path.name} is missing. Rebuild the processed dataset "
+            "with `python scripts/02_preprocess.py` before retraining."
+        )
+    manifest = json.loads(manifest_path.read_text())
+    version = int(manifest.get("feature_policy_version", 1))
+    if version != FEATURE_POLICY_VERSION:
+        raise RuntimeError(
+            f"processed dataset uses policy v{version}; current policy is "
+            f"v{FEATURE_POLICY_VERSION}. Rebuild it before retraining."
+        )
+
+
+def build_feature_spec(
+    df: pd.DataFrame,
+    data_config: dict,
+    static_features: Sequence[str] | None = None,
+) -> FeatureSpec:
+    """Build a leakage-safe feature specification from ``configs/data.yaml``.
+
+    The configured ``excluded`` list is enforced even when a per-model static
+    override names an unsafe feature. Missing optional columns are ignored so
+    the current parquet remains usable while imputation indicators are added
+    on the next data rebuild.
+    """
+    configured = data_config.get("features")
+    if not configured:
+        raise KeyError(
+            "data config is missing the required leakage-safe `features` section"
+        )
+
+    excluded = set(configured.get("excluded", []))
+
+    def available(names: Sequence[str]) -> list[str]:
+        return [c for c in names if c in df.columns and c not in excluded]
+
+    static_pool = (
+        list(static_features)
+        if static_features is not None
+        else configured.get("static", [])
+    )
+    return FeatureSpec(
+        past_observed=available(configured.get("past_observed", [])),
+        static=available(static_pool),
+        known_future=available(configured.get("known_future", [])),
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -79,6 +144,20 @@ def build_unified_dataset(
                               .dt.tz_localize(None)
                               .dt.normalize())
         df = weather.merge(satellite, on=["landkreis", "date"], how="left")
+        df = df.sort_values(["landkreis", "date"])
+        # Weather can omit the exact day of a native MODIS composite, so retain
+        # the age calculated on the complete satellite calendar. Recomputing
+        # age after this left join would falsely create multi-year gaps.
+        for index_name, max_age in SATELLITE_MAX_AGE_DAYS.items():
+            observed_col = f"{index_name}_observed"
+            age_col = f"{index_name}_age_days"
+            stale_col = f"{index_name}_stale"
+            if observed_col not in df.columns:
+                continue
+            df[observed_col] = df[observed_col].fillna(0).astype("int8")
+            df[age_col] = df[age_col].fillna(max_age + 1)
+            if stale_col in df.columns:
+                df[stale_col] = df[stale_col].fillna(1).astype("int8")
     else:
         df = weather
     df["year"] = df["date"].dt.year
@@ -110,6 +189,28 @@ def build_unified_dataset(
     if soil is not None:
         df = df.merge(soil, on="landkreis", how="left")
 
+    # Preserve descriptive land features on a normal rebuild. Predictive
+    # eligibility is still controlled exclusively by configs/data.yaml.
+    static_dir = out_path.parent / "static"
+    optional_static = [
+        (static_dir / "dem_features.parquet", ["landkreis"]),
+        (static_dir / "landcover_features.parquet", ["landkreis"]),
+        (static_dir / "phenology_proxy.parquet", ["landkreis", "year"]),
+    ]
+    for static_path, keys in optional_static:
+        if not static_path.exists():
+            continue
+        static = pd.read_parquet(static_path)
+        overlap = [c for c in static.columns if c in df.columns and c not in keys]
+        if overlap:
+            static = static.drop(columns=overlap)
+        rows_before = len(df)
+        df = df.merge(static, on=keys, how="left", validate="many_to_one")
+        if len(df) != rows_before:
+            raise RuntimeError(
+                f"row count changed while merging {static_path.name}"
+            )
+
     df["sin_doy"] = np.sin(2 * np.pi * df["doy"] / 365)
     df["cos_doy"] = np.cos(2 * np.pi * df["doy"] / 365)
 
@@ -120,20 +221,43 @@ def build_unified_dataset(
     code_to_id = {c: i for i, c in enumerate(codes)}
     df["landkreis_id"] = df["landkreis"].map(code_to_id).astype("int32")
 
-    # Fill weather feature NaNs per-landkreis (ffill/bfill, then column mean).
+    # Record missingness before filling so models can distinguish measurements
+    # from carried-forward values. Fill causally within each district only:
+    # bfill would use a future observation, while a global mean computed here
+    # would leak validation/test distribution information. Any leading NaNs are
+    # left for FeaturePipeline.transform_features(), which uses train-only means.
     weather_cols = [c for c in df.columns
                     if c.startswith(("temperature_", "precip", "radiation", "humid"))]
     sat_cols = [c for c in df.columns if c in ("ndvi", "evi", "lai", "ndwi")]
-    fill_cols = weather_cols + sat_cols
-    if fill_cols:
+    indicator_cols = weather_cols + sat_cols
+    if indicator_cols:
         df = df.sort_values(["landkreis", "date"])
-        df[fill_cols] = df.groupby("landkreis", sort=False)[fill_cols].transform(
-            lambda s: s.ffill().bfill())
-        df[fill_cols] = df[fill_cols].fillna(df[fill_cols].mean())
-        df[fill_cols] = df[fill_cols].fillna(0.0)
+        for c in indicator_cols:
+            indicator = f"{c}_missing"
+            if indicator not in df.columns:
+                df[indicator] = df[c].isna().astype("int8")
+        # Weather is daily, so carry at most one week. Satellite composites
+        # were already filled with source-specific expiry limits by their
+        # cleaner and must not be filled again here.
+        df[weather_cols] = (
+            df.groupby("landkreis", sort=False)[weather_cols].ffill(limit=7)
+        )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(out_path, index=False)
+    dataset_policy_manifest_path(out_path).write_text(
+        json.dumps(
+            {
+                "feature_policy_version": FEATURE_POLICY_VERSION,
+                "rows": len(df),
+                "columns": list(df.columns),
+                "missing_value_policy": (
+                    "bounded_causal_ffill_then_train_mean"
+                ),
+            },
+            indent=2,
+        )
+    )
     return df
 
 
@@ -160,6 +284,7 @@ class FeaturePipeline:
                  anomaly_framing: bool = True) -> None:
         self.spec = feature_spec
         self.anomaly_framing = anomaly_framing
+        self.feature_policy_version = FEATURE_POLICY_VERSION
         self.feature_mean_: dict[str, float] = {}
         self.feature_std_: dict[str, float] = {}
         self.target_mean_: dict[tuple[str, str], float] = {}  # (landkreis, crop) -> mean
@@ -237,6 +362,16 @@ class FeaturePipeline:
             df[c] = (pd.to_numeric(df[c], errors="coerce").fillna(mu) - mu) / self.feature_std_[c]
         return df
 
+    def require_current_feature_policy(self) -> None:
+        """Refuse evaluation of checkpoints trained under an unsafe policy."""
+        if self.feature_policy_version != FEATURE_POLICY_VERSION:
+            raise RuntimeError(
+                "checkpoint uses feature policy "
+                f"v{self.feature_policy_version}; current policy is "
+                f"v{FEATURE_POLICY_VERSION}. Retrain the model before reporting "
+                "metrics."
+            )
+
     def baseline_yield(self, landkreis: str, crop: str) -> float:
         return self.target_mean_.get((landkreis, crop), self.target_global_mean_)
 
@@ -285,6 +420,7 @@ class FeaturePipeline:
         # JSON-friendly keys (tuple → "landkreis|crop")
         payload = {
             "spec": asdict(self.spec),
+            "feature_policy_version": self.feature_policy_version,
             "anomaly_framing": self.anomaly_framing,
             "feature_mean": self.feature_mean_,
             "feature_std": self.feature_std_,
@@ -302,6 +438,7 @@ class FeaturePipeline:
         d = json.loads(Path(path).read_text())
         p = cls(FeatureSpec(**d["spec"]),
                 anomaly_framing=d.get("anomaly_framing", True))
+        p.feature_policy_version = d.get("feature_policy_version", 1)
         p.feature_mean_ = d["feature_mean"]
         p.feature_std_ = d["feature_std"]
         p.target_mean_ = {tuple(k.split("|", 1)): v for k, v in d["target_mean"].items()}
@@ -343,6 +480,53 @@ def apply_phenology_window(
         return df
     keep = np.concatenate([idx.to_numpy() for idx in keep_idx])
     return df.loc[keep].sort_values(["landkreis", "crop", "year", "doy"])
+
+
+def filter_incomplete_sequences(
+    df: pd.DataFrame,
+    phenology: dict[str, dict[str, int]],
+    min_coverage: float = 0.90,
+) -> pd.DataFrame:
+    """Drop crop-year sequences below the expected-window coverage threshold.
+
+    Call this after :func:`apply_phenology_window` and before splitting or
+    applying an in-season cutoff. Coverage counts unique DOYs, preventing
+    duplicated dates from making an incomplete sequence appear complete.
+    """
+    if not 0 < min_coverage <= 1:
+        raise ValueError("min_coverage must be in the interval (0, 1]")
+    if df.empty:
+        return df
+
+    expected_by_crop: dict[str, int] = {}
+    for crop, bounds in phenology.items():
+        sowing = int(bounds["sowing_doy"])
+        harvest = int(bounds["harvest_doy"])
+        expected_by_crop[crop] = (
+            harvest if sowing > harvest else harvest - sowing + 1
+        )
+
+    expected = df["crop"].map(expected_by_crop)
+    if expected.isna().any():
+        unknown = sorted(df.loc[expected.isna(), "crop"].astype(str).unique())
+        raise KeyError(f"missing phenology configuration for crops: {unknown}")
+
+    observed = (
+        df.groupby(["landkreis", "crop", "year"], sort=False)["doy"]
+        .transform("nunique")
+    )
+    keep = observed >= np.ceil(expected * min_coverage)
+    return df.loc[keep].copy()
+
+
+def prepare_modeling_frame(df: pd.DataFrame, data_config: dict) -> pd.DataFrame:
+    """Apply the shared crop window and data-quality rules."""
+    phenology = data_config["phenology"]
+    out = apply_phenology_window(df, phenology)
+    min_coverage = float(
+        data_config.get("quality", {}).get("min_sequence_coverage", 0.90)
+    )
+    return filter_incomplete_sequences(out, phenology, min_coverage)
 
 
 # --------------------------------------------------------------------------- #

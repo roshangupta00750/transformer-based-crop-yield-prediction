@@ -168,12 +168,18 @@ def clean(raw_path: str | Path, out_path: str | Path) -> Path:
     if "soc" in df:
         df["soc"] = df["soc"] / 10.0  # dg/kg → g/kg
 
-    # Median-impute any districts that failed the download (so the unified merge
-    # still gets a numeric value per Landkreis rather than NaN).
+    # Preserve the fact that a value was unavailable before median imputation.
+    # The aggregate flag is a safe static model feature and enables sensitivity
+    # analysis on districts whose SoilGrids request failed.
     feat_cols = [c for c in ("sand", "clay", "soc", "ph", "bulk_density")
                  if c in df.columns]
+    imputed_cols = []
     for c in feat_cols:
+        indicator = f"{c}_imputed"
+        df[indicator] = df[c].isna().astype("int8")
+        imputed_cols.append(indicator)
         df[c] = df[c].fillna(df[c].median())
+    df["soil_imputed"] = df[imputed_cols].max(axis=1).astype("int8")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(out_path, index=False)

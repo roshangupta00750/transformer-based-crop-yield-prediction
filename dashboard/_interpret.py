@@ -42,7 +42,9 @@ def tft_interpretation(crop: str, max_batches: int = 4) -> dict | None:
     try:
         from pytorch_forecasting import (TemporalFusionTransformer,
                                          TimeSeriesDataSet)
-        from src.data.dataset import apply_phenology_window
+        from src.data.dataset import (
+            FeaturePipeline, build_feature_spec, prepare_modeling_frame,
+        )
         from src.training.tft_adapter import (build_timeseries_dataset,
                                               prepare_tft_dataframe)
         from src.utils import load_data_config
@@ -56,22 +58,27 @@ def tft_interpretation(crop: str, max_batches: int = 4) -> dict | None:
             break
     if ckpt is None:
         return None
+    pipeline_path = CHECKPOINTS_DIR / "tft.pipeline.json"
+    if not pipeline_path.exists():
+        return None
+    try:
+        FeaturePipeline.load(pipeline_path).require_current_feature_policy()
+    except RuntimeError:
+        return None
 
     cfg = load_data_config()
     parquet = ROOT / cfg["paths"]["unified_dataset"]
     if not parquet.exists():
         return None
     df_all = pd.read_parquet(parquet)
-    df_all = apply_phenology_window(df_all, cfg["phenology"])
+    df_all = prepare_modeling_frame(df_all, cfg)
 
     train_end = cfg["splits"]["temporal"]["train_end_year"]
     test_years = cfg["splits"]["temporal"]["test_years"]
 
-    soil_cols = [c for c in df_all.columns
-                 if c in ("sand", "clay", "soc", "ph", "bulk_density")]
-    weather_sat_cols = [c for c in df_all.columns
-                        if c.startswith(("temperature_", "precip", "radiation",
-                                         "humid", "ndvi", "evi", "lai", "ndwi"))]
+    safe_spec = build_feature_spec(df_all, cfg)
+    soil_cols = safe_spec.static
+    weather_sat_cols = safe_spec.past_observed
 
     df_train_all = df_all[df_all["year"] <= train_end]
     df_tr, cols = prepare_tft_dataframe(
@@ -167,8 +174,10 @@ def _capture_attention_run(model_name: str, crop: str,
     try:
         import torch
         import torch.nn as nn
-        from src.data.dataset import (CropYieldDataset, FeaturePipeline,
-                                      apply_phenology_window, collate_pad)
+        from src.data.dataset import (
+            CropYieldDataset, FeaturePipeline, collate_pad,
+            prepare_modeling_frame,
+        )
         from src.models import build_model
         from src.utils import load_data_config, load_model_config
         from torch.utils.data import DataLoader
@@ -180,12 +189,16 @@ def _capture_attention_run(model_name: str, crop: str,
     if not ckpt.exists() or not pipeline_path.exists():
         return None
     pipe = FeaturePipeline.load(pipeline_path)
+    try:
+        pipe.require_current_feature_policy()
+    except RuntimeError:
+        return None
 
     data_cfg = load_data_config()
     model_cfg = load_model_config(model_name)
     df = pd.read_parquet(ROOT / data_cfg["paths"]["unified_dataset"])
     df = df[df["crop"] == crop]
-    df = apply_phenology_window(df, data_cfg["phenology"])
+    df = prepare_modeling_frame(df, data_cfg)
     df_test = df[df["year"].isin(data_cfg["splits"]["temporal"]["test_years"])]
     if df_test.empty:
         return None

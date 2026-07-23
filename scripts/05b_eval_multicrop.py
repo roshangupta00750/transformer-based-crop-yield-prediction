@@ -36,11 +36,13 @@ st.set_page_config = lambda **kw: None
 sys.modules["streamlit"] = st
 
 import importlib.util
+import json
 spec = importlib.util.spec_from_file_location("mt", str(ROOT / "dashboard" / "_model_template.py"))
 mt = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mt)
 
 from src.utils import load_data_config
+from src.data.dataset import FEATURE_POLICY_VERSION
 
 MODELS = ["xgboost", "dlinear", "itransformer", "lstm", "patchtst", "tft"]
 
@@ -52,6 +54,9 @@ def main() -> None:
     # Incremental write: append after each (model, crop) so a mid-eval crash
     # (e.g. TFT loading OOM) still leaves a partial multicrop_summary.csv.
     summary_path = ROOT / "results" / "metrics" / "multicrop_summary.csv"
+    policy_path = ROOT / "results" / "metrics" / "feature_policy.json"
+    if policy_path.exists():
+        policy_path.unlink()
     if summary_path.exists():
         summary_path.unlink()
     header_written = False
@@ -90,6 +95,22 @@ def main() -> None:
                    .sort_values("mean_r2", ascending=False)
                    .round(3))
     lead.to_csv(ROOT / "results" / "metrics" / "multicrop_leaderboard.csv")
+
+    expected_pairs = len(MODELS) * len(crops)
+    completed_pairs = summary[["model", "crop"]].drop_duplicates().shape[0]
+    if completed_pairs == expected_pairs:
+        policy_path.write_text(json.dumps({
+            "feature_policy_version": FEATURE_POLICY_VERSION,
+            "models": MODELS,
+            "crops": crops,
+            "completed_pairs": completed_pairs,
+        }, indent=2))
+        print(f"Wrote current-results marker: {policy_path}")
+    else:
+        print(
+            f"Results remain unmarked: completed {completed_pairs}/"
+            f"{expected_pairs} model-crop pairs."
+        )
 
     print("\n=== Mean-per-crop leaderboard ===")
     print(lead.to_string())
