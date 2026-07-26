@@ -131,11 +131,22 @@ def _predict_test_set_tft(crop: str,
     cap_doy = cutoff_doy if cutoff_doy is not None else None
     rows: list[dict] = []
     for yr in test_years:
+        # Restrict to landkreise that actually have a valid target at yr.
+        # Without this, pf's predict=True fires on every series in df_slice
+        # regardless of whether it has data at yr — those series get
+        # predictions from their real last-observed year (e.g. 2020), but
+        # rows are labeled year=yr, so y_true is pulled from a disjoint year
+        # and R² craters. Matches the generic path's df["year"].isin(yrs) filter.
+        valid_lk = (df[(df["year"] == yr) & (df["yield_dt_per_ha"].notna())]
+                    [["landkreis"]].drop_duplicates())
+        if valid_lk.empty:
+            continue
         if cap_doy is not None:
             df_slice = df[(df["year"] < yr)
                           | ((df["year"] == yr) & (df["doy"] <= cap_doy))].copy()
         else:
             df_slice = df[df["year"] <= yr].copy()
+        df_slice = df_slice.merge(valid_lk, on="landkreis", how="inner")
         df_slice_p, _ = prepare_tft_dataframe(
             df_slice, soil_cols=soil_cols, weather_sat_cols=weather_sat_cols,
         )
