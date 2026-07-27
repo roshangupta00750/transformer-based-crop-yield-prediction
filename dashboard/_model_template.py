@@ -72,7 +72,18 @@ def _predict_test_set_tft(crop: str,
         return pd.DataFrame(), {"error": "Unified dataset not found."}
     df_all = prepare_modeling_frame(df_all, data_cfg)
 
-    safe_pipeline = load_pipeline("tft")
+    # Prefer per-crop TFT checkpoint (tft_<crop>.{pt,pipeline.json}) when it
+    # exists; fall back to the shared multi-crop checkpoint (tft.{pt,pipeline.json}).
+    # Per-crop training gives each series family its own capacity and normalizer
+    # baseline; shared training keeps one model for all crops.
+    percrop_pipeline_path = CHECKPOINTS_DIR / f"tft_{crop}.pipeline.json"
+    percrop_ckpt_path = CHECKPOINTS_DIR / f"tft_{crop}.pt"
+    _use_percrop_tft = (percrop_pipeline_path.exists()
+                        and percrop_ckpt_path.exists())
+    if _use_percrop_tft:
+        safe_pipeline = load_pipeline(f"tft_{crop}")
+    else:
+        safe_pipeline = load_pipeline("tft")
     if safe_pipeline is None:
         return pd.DataFrame(), {
             "error": "TFT pipeline missing — retrain under the safe feature policy."
@@ -95,10 +106,13 @@ def _predict_test_set_tft(crop: str,
     soil_cols = list(safe_pipeline.spec.static)
     weather_sat_cols = list(safe_pipeline.spec.past_observed)
 
-    # IMPORTANT: build train_ds on ALL crops the model was trained on, so the
-    # categorical encoders + GroupNormalizer match the checkpoint. Filtering to
-    # one crop here would re-fit the normalizers and produce garbage.
+    # IMPORTANT: the reference TimeSeriesDataSet must be built on exactly the
+    # data population the checkpoint was trained on, so the categorical encoders
+    # and GroupNormalizer match. For a per-crop checkpoint that means filtering
+    # to this crop; for the shared checkpoint we keep all crops.
     df_train_all = df_all[df_all["year"] <= train_end]
+    if _use_percrop_tft:
+        df_train_all = df_train_all[df_train_all["crop"] == crop]
     if df_train_all.empty:
         return pd.DataFrame(), {"error": "Empty training data."}
     df_tr, cols = prepare_tft_dataframe(
@@ -112,7 +126,8 @@ def _predict_test_set_tft(crop: str,
     df = df_all[df_all["crop"] == crop].copy()
 
     ckpt = None
-    for cand in (CHECKPOINTS_DIR / "tft.pt",
+    for cand in (percrop_ckpt_path,
+                 CHECKPOINTS_DIR / "tft.pt",
                  CHECKPOINTS_DIR / "tft_abs.pt"):
         if cand.exists():
             ckpt = cand
