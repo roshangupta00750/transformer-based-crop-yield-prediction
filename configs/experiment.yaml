@@ -9,7 +9,7 @@ deterministic: true
 budget:
   max_epochs: 200                              # fine-tune regime
   early_stopping_patience: 20      # fine-tune regime
-  max_minutes: 60         # hard wall-clock cap per model on laptop GPU
+  max_minutes: 120        # hard wall-clock cap per model (bumped from 60 for per-crop TFT convergence)
 
 # Logging
 log:
