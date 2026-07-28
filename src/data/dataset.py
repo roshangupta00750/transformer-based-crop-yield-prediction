@@ -297,6 +297,11 @@ class FeaturePipeline:
         # value (e.g. 175 dt/ha rapeseed) that wrecks pooled RMSE / R².
         self.target_clip_by_crop_: dict[str, list[float]] = {}
         self.sequence_length_: int | None = None
+        # Encoder window the TFT checkpoint was trained with. Evaluation
+        # must rebuild its reference TimeSeriesDataSet with the same value
+        # or the model sees a different context length than it learned on.
+        # None on pre-existing checkpoints, which all used 180.
+        self.tft_max_encoder_length_: int | None = None
         self.fitted_ = False
 
     def fit(self, df_train: pd.DataFrame) -> "FeaturePipeline":
@@ -459,6 +464,7 @@ class FeaturePipeline:
             "target_anomaly_std_by_crop": self.target_anomaly_std_by_crop_,
             "target_clip_by_crop": self.target_clip_by_crop_,
             "sequence_length": self.sequence_length_,
+            "tft_max_encoder_length": self.tft_max_encoder_length_,
         }
         path.write_text(json.dumps(payload))
 
@@ -477,6 +483,7 @@ class FeaturePipeline:
         p.target_anomaly_std_by_crop_ = d.get("target_anomaly_std_by_crop", {})
         p.target_clip_by_crop_ = d.get("target_clip_by_crop", {})
         p.sequence_length_ = d.get("sequence_length")
+        p.tft_max_encoder_length_ = d.get("tft_max_encoder_length")
         p.fitted_ = True
         return p
 

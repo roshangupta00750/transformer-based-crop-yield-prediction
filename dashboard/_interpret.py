@@ -46,7 +46,8 @@ def tft_interpretation(crop: str, max_batches: int = 4) -> dict | None:
         from src.data.dataset import (
             FeaturePipeline, prepare_modeling_frame,
         )
-        from src.training.tft_adapter import (build_timeseries_dataset,
+        from src.training.tft_adapter import (DEFAULT_MAX_ENCODER_LENGTH,
+                                              build_timeseries_dataset,
                                               prepare_tft_dataframe,
                                               transform_tft_features)
         from src.utils import load_data_config
@@ -90,8 +91,14 @@ def tft_interpretation(crop: str, max_batches: int = 4) -> dict | None:
     df_tr, cols = prepare_tft_dataframe(
         df_train_all, soil_cols=soil_cols, weather_sat_cols=weather_sat_cols,
     )
+    # Match the encoder window the checkpoint was trained with. Per-crop TFTs
+    # on short-season crops use a smaller window than the 180 default; feeding
+    # the model a longer context than it learned on shifts its predictions.
+    # Pre-existing checkpoints have no recorded value and all used 180.
+    _enc = getattr(safe_pipeline, "tft_max_encoder_length_", None) or \
+        DEFAULT_MAX_ENCODER_LENGTH
     train_ds = build_timeseries_dataset(
-        df_tr, cols, max_encoder_length=180, max_prediction_length=1,
+        df_tr, cols, max_encoder_length=int(_enc), max_prediction_length=1,
     )
 
     model = TemporalFusionTransformer.load_from_checkpoint(str(ckpt))

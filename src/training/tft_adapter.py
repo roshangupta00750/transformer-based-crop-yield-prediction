@@ -54,6 +54,48 @@ def transform_tft_features(df: pd.DataFrame, pipeline) -> pd.DataFrame:
     return out
 
 
+DEFAULT_MAX_ENCODER_LENGTH = 180
+
+
+def safe_max_encoder_length(
+    *frames: pd.DataFrame,
+    ceiling: int = DEFAULT_MAX_ENCODER_LENGTH,
+    max_prediction_length: int = 1,
+    floor: int = 30,
+) -> int:
+    """Largest encoder window that leaves every series in ``frames`` usable.
+
+    ``TimeSeriesDataSet`` drops any series with fewer than
+    ``max_encoder_length + max_prediction_length`` timesteps. When *some*
+    series survive, pf only warns; when *none* do it raises
+    ``AssertionError: filters should not remove entries all entries``.
+
+    That distinction is why the shared multi-crop TFT trained fine while
+    per-crop training crashed: the validation split is a single year, so a
+    short-season crop (summer_barley spans 136 DOYs) has ~123 timesteps per
+    series after the 90 % coverage filter — under the default 180 encoder,
+    every one of its series is filtered out. In the shared model the long
+    winter crops kept the index non-empty and the short crops were silently
+    dropped from validation instead.
+
+    Pass the prepared (``prepare_tft_dataframe``) train and validation frames
+    so the returned value is safe for both.
+    """
+    lengths = []
+    for df in frames:
+        if df is None or df.empty:
+            continue
+        if "series_id" not in df.columns:
+            raise KeyError(
+                "safe_max_encoder_length expects frames from "
+                "prepare_tft_dataframe (missing series_id)"
+            )
+        lengths.append(int(df.groupby("series_id", sort=False).size().min()))
+    if not lengths:
+        return ceiling
+    return max(floor, min(ceiling, min(lengths) - max_prediction_length))
+
+
 @dataclass
 class TFTColumns:
     """Defines column roles for pytorch-forecasting."""

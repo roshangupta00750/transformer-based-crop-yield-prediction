@@ -168,6 +168,13 @@ def main() -> None:
         model.save(ckpt_dir / f"{name}.pt")
     except NotImplementedError:
         log.info("Model %s has no save() — skipping checkpoint.", args.model)
+    # TFT resolves its encoder window from the data (short-season crops cannot
+    # use the 180-step default). Record it so evaluation rebuilds the reference
+    # TimeSeriesDataSet with the same geometry the checkpoint learned on.
+    _tft_enc = getattr(model, "max_encoder_length_", None)
+    if _tft_enc is not None:
+        pipeline.tft_max_encoder_length_ = int(_tft_enc)
+        log.info("TFT max_encoder_length: %d", _tft_enc)
     pipeline.save(ckpt_dir / f"{name}.pipeline.json")
 
     log.info("Done. Checkpoint + pipeline in %s", ckpt_dir)

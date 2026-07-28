@@ -32,6 +32,9 @@ class TFTModel(BaseModel):
         self.trainer = None
         self.training_dataset = None
         self.device = "cpu"
+        # Resolved in fit_from_df; persisted to the pipeline JSON so evaluation
+        # rebuilds the reference TimeSeriesDataSet with the same geometry.
+        self.max_encoder_length_: int | None = None
 
     # ----------------------------------------------------------------- #
     # Recommended entry point — pass DataFrames directly
@@ -44,7 +47,7 @@ class TFTModel(BaseModel):
         soil_cols: list[str],
         weather_sat_cols: list[str],
         target_col: str = "yield_dt_per_ha",
-        max_encoder_length: int = 180,
+        max_encoder_length: int | None = None,
         max_epochs: int = 50,
         device: str = "cpu",
         max_minutes: float | None = None,
@@ -69,12 +72,31 @@ class TFTModel(BaseModel):
 
         from ..training.tft_adapter import (
             build_timeseries_dataset, prepare_tft_dataframe,
+            safe_max_encoder_length,
         )
 
         df_tr, cols = prepare_tft_dataframe(
             df_train, soil_cols=soil_cols,
             weather_sat_cols=weather_sat_cols, target_col=target_col,
         )
+        df_v = None
+        if df_val is not None:
+            df_v, _ = prepare_tft_dataframe(
+                df_val, soil_cols=soil_cols,
+                weather_sat_cols=weather_sat_cols, target_col=target_col,
+            )
+
+        # Derive the encoder window from the data rather than assuming 180.
+        # The validation split is a single year, so short-season crops
+        # (summer_barley ≈ 123 usable DOYs) have every series filtered out by
+        # a 180-step encoder and pf raises "filters should not remove entries
+        # all entries". Callers may still pin a value explicitly.
+        if max_encoder_length is None:
+            max_encoder_length = safe_max_encoder_length(
+                df_tr, df_v, max_prediction_length=1,
+            )
+        self.max_encoder_length_ = int(max_encoder_length)
+
         ds_tr = build_timeseries_dataset(
             df_tr, cols, max_encoder_length=max_encoder_length,
             max_prediction_length=1,
@@ -86,11 +108,7 @@ class TFTModel(BaseModel):
         )
 
         val_loader = None
-        if df_val is not None:
-            df_v, _ = prepare_tft_dataframe(
-                df_val, soil_cols=soil_cols,
-                weather_sat_cols=weather_sat_cols, target_col=target_col,
-            )
+        if df_v is not None:
             ds_v = build_timeseries_dataset(
                 df_v, cols, max_encoder_length=max_encoder_length,
                 max_prediction_length=1,

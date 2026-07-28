@@ -1,6 +1,7 @@
 """Tests for the leakage-safe data policy."""
 from __future__ import annotations
 
+import json
 import numpy as np
 import pandas as pd
 import torch
@@ -180,3 +181,70 @@ def test_observed_target_inverse_does_not_clip_ground_truth() -> None:
 
     np.testing.assert_allclose(recovered, observed)
     assert clipped_prediction[0] != observed[0]
+
+
+def test_encoder_window_shrinks_for_short_season_crops():
+    """A single-year validation split of a short-season crop must stay usable.
+
+    ``TimeSeriesDataSet`` drops every series shorter than
+    ``max_encoder_length + max_prediction_length`` and raises when that empties
+    the index. Per-crop TFT training hit exactly that: summer_barley spans 136
+    DOYs (~123 after the 90 % coverage filter), so the 180-step default removed
+    all of its validation series. The shared multi-crop model masked the bug —
+    long winter-crop series kept the index non-empty while the short crops were
+    silently dropped from validation instead.
+    """
+    from src.training.tft_adapter import (DEFAULT_MAX_ENCODER_LENGTH,
+                                          prepare_tft_dataframe,
+                                          safe_max_encoder_length)
+
+    def _frame(crop, n_days, n_districts=3):
+        rows = []
+        for d in range(n_districts):
+            for doy in range(1, n_days + 1):
+                rows.append({
+                    "landkreis": f"DE{d:03d}", "crop": crop, "year": 2023,
+                    "doy": doy, "yield_dt_per_ha": 50.0,
+                })
+        df = pd.DataFrame(rows)
+        prepared, _ = prepare_tft_dataframe(df, soil_cols=[], weather_sat_cols=[])
+        return prepared
+
+    short = _frame("summer_barley", 123)
+    long = _frame("winter_wheat", 200)
+
+    short_enc = safe_max_encoder_length(short, max_prediction_length=1)
+    assert short_enc == 122, short_enc
+    assert short_enc < DEFAULT_MAX_ENCODER_LENGTH
+
+    # Long-season crops keep the default ceiling.
+    assert safe_max_encoder_length(long, max_prediction_length=1) == \
+        DEFAULT_MAX_ENCODER_LENGTH
+
+    # Passing train + val together must respect the *shorter* of the two,
+    # which is the case that actually crashed (long train, single-year val).
+    assert safe_max_encoder_length(long, short, max_prediction_length=1) == 122
+
+
+def test_tft_encoder_length_round_trips_through_pipeline_json(tmp_path):
+    """Evaluation must rebuild the reference dataset with the trained window."""
+    from src.data.dataset import FeaturePipeline, FeatureSpec
+
+    spec = FeatureSpec(past_observed=["ndvi"], static=[], known_future=[])
+    train = pd.DataFrame({
+        "landkreis": ["A", "A"], "crop": ["c", "c"], "year": [2020, 2021],
+        "ndvi": [0.4, 0.5], "yield_dt_per_ha": [10.0, 12.0],
+    })
+    pipeline = FeaturePipeline(spec).fit(train)
+    pipeline.tft_max_encoder_length_ = 122
+
+    path = tmp_path / "tft_summer_barley.pipeline.json"
+    pipeline.save(path)
+    assert FeaturePipeline.load(path).tft_max_encoder_length_ == 122
+
+    # Checkpoints written before this field existed must still load, and the
+    # caller's ``or DEFAULT`` fallback then applies.
+    legacy = json.loads(path.read_text())
+    legacy.pop("tft_max_encoder_length")
+    path.write_text(json.dumps(legacy))
+    assert FeaturePipeline.load(path).tft_max_encoder_length_ is None
