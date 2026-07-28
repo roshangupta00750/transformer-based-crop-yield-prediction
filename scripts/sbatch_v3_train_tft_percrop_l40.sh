@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=tft-percrop-l40
 #SBATCH --partition=standard
-#SBATCH --qos=norm+
+#SBATCH --qos=normal
 #SBATCH --gres=gpu:L40:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
