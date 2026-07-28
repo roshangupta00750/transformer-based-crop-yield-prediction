@@ -4,7 +4,7 @@
 #SBATCH --gres=gpu:H100:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
-#SBATCH --time=02:30:00
+#SBATCH --time=01:15:00
 #SBATCH --array=1-10
 #SBATCH --output=/home/s517868/slurm_logs/tft-percrop-%A_%a.out
 #SBATCH --error=/home/s517868/slurm_logs/tft-percrop-%A_%a.err
