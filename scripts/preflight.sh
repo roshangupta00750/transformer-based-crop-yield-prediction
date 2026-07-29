@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# Pre-flight for any julia2 submission. Run this BEFORE sbatch, every time.
+#
+# Exists because six separate runs in one week were lost to avoidable causes:
+# a sbatch success-gate that tested for the wrong artefact, an `afterok`
+# dependency on an array whose task had only cosmetically failed, a `--resume`
+# that silently treated stale rows as complete, a guessed-at QoS name, and
+# twice submitting a script whose fix had been committed but never rsynced.
+# None of those were cluster problems and none produced any information.
+#
+# Usage:  bash scripts/preflight.sh scripts/<sbatch script>.sh
+set -uo pipefail
+
+SBATCH_FILE="${1:?usage: preflight.sh scripts/<sbatch>.sh}"
+REMOTE=julia2
+RROOT='~/crop_yield_benchmark'
+LROOT="$(cd "$(dirname "$0")/.." && pwd)"
+fails=0
+
+# Resolve an interpreter that has the project deps. A bare `python` is not on
+# PATH in a fresh non-interactive shell, which silently failed the test gate.
+PY=""
+for cand in "${CONDA_PREFIX:-/nonexistent}/bin/python" \
+            "$HOME/miniconda3/envs/agri/bin/python" \
+            "$(command -v python3 2>/dev/null)"; do
+  if [ -x "$cand" ] && "$cand" -c "import pandas, torch" 2>/dev/null; then PY="$cand"; break; fi
+done
+if [ -z "$PY" ]; then
+  printf '  \033[31mFAIL\033[0m  no python with project deps found\n'; exit 1
+fi
+echo "     interpreter: $PY"
+
+ok()   { printf '  \033[32mPASS\033[0m  %s\n' "$1"; }
+bad()  { printf '  \033[31mFAIL\033[0m  %s\n' "$1"; fails=$((fails+1)); }
+warn() { printf '  \033[33mWARN\033[0m  %s\n' "$1"; }
+
+echo "=== 1. local tests ==="
+if (cd "$LROOT" && "$PY" -m pytest -q >/tmp/pf_tests.log 2>&1); then
+  ok "pytest ($(grep -oE '[0-9]+ passed' /tmp/pf_tests.log | tail -1))"
+else
+  bad "pytest — see /tmp/pf_tests.log"; tail -5 /tmp/pf_tests.log | sed 's/^/        /'
+fi
+
+if (cd "$LROOT" && "$PY" -m compileall -q dashboard scripts src tests >/tmp/pf_compile.log 2>&1); then
+  ok "compileall"
+else
+  bad "compileall — see /tmp/pf_compile.log"
+fi
+
+echo "=== 2. reachability ==="
+if ssh -T -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE" true 2>/dev/null; then
+  ok "ssh $REMOTE"
+else
+  bad "ssh $REMOTE unreachable (VPN down?) — stopping"; exit 1
+fi
+
+echo "=== 3. code actually synced (not merely committed) ==="
+# The failure mode this catches: fix committed locally, sbatch submitted
+# remotely, remote still running the old file.
+while IFS= read -r rel; do
+  [ -f "$LROOT/$rel" ] || continue
+  lsum=$(shasum -a 256 "$LROOT/$rel" | cut -d' ' -f1)
+  rsum=$(ssh -T "$REMOTE" "sha256sum $RROOT/$rel 2>/dev/null | cut -d' ' -f1")
+  if [ "$lsum" = "$rsum" ]; then ok "synced $rel"; else bad "STALE ON REMOTE: $rel"; fi
+done < <(cd "$LROOT" && git diff --name-only HEAD~3 2>/dev/null | grep -E '^(src|scripts|dashboard|configs)/.*\.(py|sh|yaml)$' | head -20)
+
+echo "=== 4. sbatch directives ==="
+part=$(sed -n 's/^#SBATCH --partition=\([^ ]*\).*/\1/p' "$SBATCH_FILE" | head -1)
+qos=$( sed -n 's/^#SBATCH --qos=\([^ ]*\).*/\1/p'       "$SBATCH_FILE" | head -1)
+gres=$(sed -n 's/^#SBATCH --gres=\([^ ]*\).*/\1/p'      "$SBATCH_FILE" | head -1)
+echo "     partition=$part qos=${qos:-<none>} gres=$gres"
+[ -n "$qos" ] || warn "no --qos: defaults to computervision, whose GPU-minute cap has been exhausted"
+
+valid_qos=$(ssh -T "$REMOTE" "sacctmgr -n -P show assoc where user=\$USER format=qos" | tr ',' '\n' | tr -d ' ')
+if [ -n "$qos" ]; then
+  echo "$valid_qos" | grep -qx "$qos" && ok "qos '$qos' is granted" || bad "qos '$qos' NOT granted (have: $(echo $valid_qos | tr '\n' ' '))"
+fi
+
+echo "=== 5. scheduler accepts it, and at what cost ==="
+res=$(ssh -T "$REMOTE" "cd $RROOT && sbatch --test-only $(basename "$SBATCH_FILE" | sed 's|^|scripts/|') 2>&1" | head -3)
+echo "$res" | sed 's/^/     /'
+echo "$res" | grep -qi 'error'   && bad "scheduler rejected it"      || ok "scheduler accepts"
+echo "$res" | grep -qi 'preempt' && bad "would PREEMPT other users' jobs — pick another partition"
+
+echo "=== 6. free GPUs on the target partition ==="
+ssh -T "$REMOTE" "sinfo -p $part -h -o '%.10t %.4D %.14G'" 2>/dev/null | sed 's/^/     /'
+
+echo "=== 7. inputs the job will read ==="
+ssh -T "$REMOTE" "cd $RROOT && \
+  echo \"     dataset.parquet: \$(test -f data/processed/dataset.parquet && echo present || echo MISSING)\" && \
+  echo \"     policy sidecar : \$(test -f data/processed/dataset.policy.json && echo present || echo MISSING)\" && \
+  echo \"     per-crop TFT   : \$(ls -1 results/checkpoints/tft_*.pt 2>/dev/null | grep -v abs | wc -l)/10\" && \
+  echo \"     venv           : \$(test -d ~/agri-venv && echo present || echo MISSING)\""
+
+echo
+if [ "$fails" -eq 0 ]; then
+  printf '\033[32mPREFLIGHT CLEAN — safe to sbatch\033[0m\n'
+else
+  printf '\033[31mPREFLIGHT: %d FAILURE(S) — do not submit\033[0m\n' "$fails"; exit 1
+fi
