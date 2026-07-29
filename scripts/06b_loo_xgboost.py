@@ -132,12 +132,15 @@ def main() -> None:
 
             lk_arr = np.array([k[0] for k in ds_te.keys])
             cr_arr = np.array([k[1] for k in ds_te.keys])
-            y_pred = pipe.inverse_transform_array(lk_arr, cr_arr, z_pred)
+            yr_arr = np.array([k[2] for k in ds_te.keys])
+            y_pred = pipe.inverse_transform_array(lk_arr, cr_arr, z_pred, yr_arr)
             y_true = pipe.inverse_transform_observed_array(
-                lk_arr, cr_arr, np.asarray(ds_te._targets_z)
+                lk_arr, cr_arr, np.asarray(ds_te._targets_z), yr_arr
             )
 
-            if np.var(y_true) < 1e-9 or len(y_true) < 2:
+            # n=2 makes the R2 denominator half the squared gap between two
+            # years, which is often ~0 and made R2 explode to -292,911.
+            if np.var(y_true) < 1e-9 or len(y_true) < 3:
                 # Single test point or zero variance -> R² undefined; record
                 # the absolute error instead.
                 rows.append({"crop": crop, "landkreis": lk,

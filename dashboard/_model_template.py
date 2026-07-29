@@ -340,9 +340,9 @@ def _predict_test_set(model: str, crop: str,
     lk = np.array([k[0] for k in keys])
     cr = np.array([k[1] for k in keys])
     yrs = np.array([k[2] for k in keys])
-    y_pred = pipeline.inverse_transform_array(lk, cr, z_pred)
+    y_pred = pipeline.inverse_transform_array(lk, cr, z_pred, yrs)
     y_true = pipeline.inverse_transform_observed_array(
-        lk, cr, np.asarray(ds._targets_z)
+        lk, cr, np.asarray(ds._targets_z), yrs
     )
 
     return pd.DataFrame({

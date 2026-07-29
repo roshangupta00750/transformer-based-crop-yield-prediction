@@ -47,9 +47,10 @@ def evaluate_at_horizons(
 
         lk = np.array([k[0] for k in ds.keys])
         cr = np.array([k[1] for k in ds.keys])
-        y_pred_abs = pipeline.inverse_transform_array(lk, cr, z_pred)
+        yr = np.array([k[2] for k in ds.keys])
+        y_pred_abs = pipeline.inverse_transform_array(lk, cr, z_pred, yr)
         y_true_abs = pipeline.inverse_transform_observed_array(
-            lk, cr, np.asarray(ds._targets_z)
+            lk, cr, np.asarray(ds._targets_z), yr
         )
 
         results[f"h-{h}d"] = all_metrics(y_true_abs, y_pred_abs)
