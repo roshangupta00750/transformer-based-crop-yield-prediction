@@ -35,6 +35,7 @@ class TFTModel(BaseModel):
         # Resolved in fit_from_df; persisted to the pipeline JSON so evaluation
         # rebuilds the reference TimeSeriesDataSet with the same geometry.
         self.max_encoder_length_: int | None = None
+        self.best_val_score_: float | None = None
 
     # ----------------------------------------------------------------- #
     # Recommended entry point — pass DataFrames directly
@@ -49,6 +50,7 @@ class TFTModel(BaseModel):
         target_col: str = "yield_dt_per_ha",
         max_encoder_length: int | None = None,
         max_epochs: int = 50,
+        patience: int = 15,
         device: str = "cpu",
         max_minutes: float | None = None,
     ):
@@ -61,6 +63,8 @@ class TFTModel(BaseModel):
             from lightning.pytorch.loggers import CSVLogger
             from pytorch_forecasting import TemporalFusionTransformer
             from pytorch_forecasting.metrics import MAE, QuantileLoss
+            from lightning.pytorch.callbacks import (EarlyStopping,
+                                                     ModelCheckpoint)
             from torch.utils.data import DataLoader
         except ImportError as e:
             raise ImportError(
@@ -102,20 +106,30 @@ class TFTModel(BaseModel):
             max_prediction_length=1,
         )
         self.training_dataset = ds_tr
+        # num_workers from config: 4 is right on a 16-CPU cluster node but
+        # deadlocks under macOS spawn, so it has to be overridable.
+        nw = int(self.config.get("num_workers", 4))
         train_loader = ds_tr.to_dataloader(
             train=True, batch_size=self.config.get("batch_size", 128),
-            num_workers=4, persistent_workers=True, pin_memory=True,
+            num_workers=nw, persistent_workers=nw > 0, pin_memory=True,
         )
 
         val_loader = None
         if df_v is not None:
-            ds_v = build_timeseries_dataset(
-                df_v, cols, max_encoder_length=max_encoder_length,
-                max_prediction_length=1,
+            # from_dataset, NOT a fresh build. A standalone TimeSeriesDataSet
+            # refits its own NaNLabelEncoder and GroupNormalizer on the val
+            # split, so every series gets a different categorical code than it
+            # had in training and the target is normalised against a single
+            # year's statistics. The result was a val_loss frozen at 129.9611
+            # for the whole run while train loss halved — no usable early-stop
+            # or checkpoint-selection signal at all.
+            from pytorch_forecasting import TimeSeriesDataSet
+            ds_v = TimeSeriesDataSet.from_dataset(
+                ds_tr, df_v, stop_randomization=True, predict=False,
             )
             val_loader = ds_v.to_dataloader(
                 train=False, batch_size=self.config.get("batch_size", 128),
-                num_workers=4, persistent_workers=True, pin_memory=True,
+                num_workers=nw, persistent_workers=nw > 0, pin_memory=True,
             )
 
         loss_name = str(self.config.get("loss", "mae")).lower()
@@ -146,6 +160,19 @@ class TFTModel(BaseModel):
         cap_minutes = float(max_minutes) if max_minutes else 55.0
         log_dir = Path("results/logs/tft")
         log_dir.mkdir(parents=True, exist_ok=True)
+        # Without callbacks pl.Trainer can only stop on max_epochs or the wall
+        # clock, and always keeps the last step's weights — so the configured
+        # early_stopping_patience was silently discarded and TFT shipped
+        # "whatever the model looked like when the timer expired".
+        callbacks = []
+        if val_loader is not None:
+            callbacks = [
+                EarlyStopping(monitor="val_loss", patience=patience,
+                              mode="min", check_finite=False),
+                ModelCheckpoint(monitor="val_loss", mode="min", save_top_k=1,
+                                dirpath=str(log_dir / "ckpt"),
+                                filename="best"),
+            ]
         self.trainer = pl.Trainer(
             max_epochs=max_epochs,
             max_time={"minutes": cap_minutes},
@@ -153,11 +180,23 @@ class TFTModel(BaseModel):
             gradient_clip_val=0.1,
             enable_progress_bar=True,
             enable_checkpointing=True,
+            callbacks=callbacks,
             logger=CSVLogger(save_dir=str(log_dir.parent), name=log_dir.name),
             log_every_n_steps=50,
         )
         self.trainer.fit(self.model, train_dataloaders=train_loader,
                          val_dataloaders=val_loader)
+
+        # Reload the best-validation weights before the caller saves us.
+        ckpt_cb = next((c for c in callbacks if isinstance(c, ModelCheckpoint)), None)
+        if ckpt_cb is not None and ckpt_cb.best_model_path \
+                and Path(ckpt_cb.best_model_path).exists():
+            self.model = TemporalFusionTransformer.load_from_checkpoint(
+                ckpt_cb.best_model_path)
+            self.best_val_score_ = (
+                float(ckpt_cb.best_model_score)
+                if ckpt_cb.best_model_score is not None else None
+            )
         return self
 
     # ----------------------------------------------------------------- #
@@ -192,6 +231,7 @@ class TFTModel(BaseModel):
             df_train=df_tr, df_val=df_v,
             soil_cols=soil_cols, weather_sat_cols=weather_sat_cols,
             max_epochs=kwargs.get("max_epochs", 50),
+            patience=kwargs.get("patience", 15),
             device=kwargs.get("device", "cpu"),
             max_minutes=kwargs.get("max_minutes"),
         )
