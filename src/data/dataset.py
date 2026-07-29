@@ -288,6 +288,7 @@ class FeaturePipeline:
         self.feature_mean_: dict[str, float] = {}
         self.feature_std_: dict[str, float] = {}
         self.target_mean_: dict[tuple[str, str], float] = {}  # (landkreis, crop) -> mean
+        self.target_mean_by_crop_: dict[str, float] = {}     # crop -> mean (fallback)
         self.target_global_mean_: float = 0.0
         self.target_global_std_: float = 1.0
         self.target_anomaly_std_: float = 1.0          # global fallback
@@ -320,14 +321,23 @@ class FeaturePipeline:
                               [self.spec.target].first().reset_index())
         self.target_global_mean_ = float(y_per_key[self.spec.target].mean())
         self.target_global_std_ = float(y_per_key[self.spec.target].std() or 1.0)
+        # Per-crop mean, used as the baseline for a (landkreis, crop) that has
+        # no training history. The global mean is pooled ACROSS crops, so it
+        # sits between wheat (~73 dt/ha) and sugar beet (~673) and is not a
+        # plausible yield for either — falling back to it produced physically
+        # impossible predictions that no model output could recover from.
+        self.target_mean_by_crop_ = {
+            cr: float(v) for cr, v in
+            y_per_key.groupby("crop")[self.spec.target].mean().items()
+        }
 
         # Per-(landkreis, crop) mean for anomaly framing.
         baseline = y_per_key.groupby(["landkreis", "crop"])[self.spec.target].mean()
         self.target_mean_ = {(lk, cr): float(v) for (lk, cr), v in baseline.items()}
         y_per_key = y_per_key.copy()
         y_per_key["anomaly"] = [
-            row[self.spec.target] - self.target_mean_.get(
-                (row["landkreis"], row["crop"]), self.target_global_mean_)
+            row[self.spec.target] - self.baseline_yield(
+                row["landkreis"], row["crop"])
             for _, row in y_per_key.iterrows()
         ]
         # Global anomaly std (fallback) + per-crop anomaly std. Per-crop is
@@ -379,7 +389,11 @@ class FeaturePipeline:
             )
 
     def baseline_yield(self, landkreis: str, crop: str) -> float:
-        return self.target_mean_.get((landkreis, crop), self.target_global_mean_)
+        """District baseline, degrading to the crop mean then the global mean."""
+        v = self.target_mean_.get((landkreis, crop))
+        if v is not None:
+            return v
+        return self.target_mean_by_crop_.get(crop, self.target_global_mean_)
 
     def transform_target(self, landkreis: str, crop: str, y: float) -> float:
         if self.anomaly_framing:
@@ -421,8 +435,7 @@ class FeaturePipeline:
         z = np.asarray(z, dtype=float)
         if self.anomaly_framing:
             base = np.array([
-                self.target_mean_.get((lk, cr), self.target_global_mean_)
-                for lk, cr in zip(landkreis, crop)
+                self.baseline_yield(lk, cr) for lk, cr in zip(landkreis, crop)
             ])
             std = np.array([self._anomaly_std(cr) for cr in crop])
             return z * std + base
@@ -435,8 +448,7 @@ class FeaturePipeline:
         if self.anomaly_framing:
             z = np.clip(z, -self.Z_CLIP, self.Z_CLIP)
             base = np.array([
-                self.target_mean_.get((lk, cr), self.target_global_mean_)
-                for lk, cr in zip(landkreis, crop)
+                self.baseline_yield(lk, cr) for lk, cr in zip(landkreis, crop)
             ])
             std = np.array([self._anomaly_std(cr) for cr in crop])
             val = z * std + base
@@ -458,6 +470,7 @@ class FeaturePipeline:
             "feature_mean": self.feature_mean_,
             "feature_std": self.feature_std_,
             "target_mean": {f"{k[0]}|{k[1]}": v for k, v in self.target_mean_.items()},
+            "target_mean_by_crop": self.target_mean_by_crop_,
             "target_global_mean": self.target_global_mean_,
             "target_global_std": self.target_global_std_,
             "target_anomaly_std": self.target_anomaly_std_,
@@ -477,6 +490,7 @@ class FeaturePipeline:
         p.feature_mean_ = d["feature_mean"]
         p.feature_std_ = d["feature_std"]
         p.target_mean_ = {tuple(k.split("|", 1)): v for k, v in d["target_mean"].items()}
+        p.target_mean_by_crop_ = d.get("target_mean_by_crop", {})
         p.target_global_mean_ = d["target_global_mean"]
         p.target_global_std_ = d.get("target_global_std", 1.0)
         p.target_anomaly_std_ = d["target_anomaly_std"]
