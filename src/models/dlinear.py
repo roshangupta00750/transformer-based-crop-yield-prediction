@@ -6,6 +6,8 @@ average and applies one linear projection per channel (or shared).
 """
 from __future__ import annotations
 
+import copy
+
 from typing import Any
 
 import numpy as np
@@ -95,11 +97,20 @@ class DLinearModel(BaseModel):
             individual=self.config["individual"],
         ).to(device)
 
-        opt = torch.optim.AdamW(self.net.parameters(),
-                                lr=lr or self.config["learning_rate"])
+        opt = torch.optim.AdamW(
+            self.net.parameters(),
+            lr=lr or self.config["learning_rate"],
+            # Without this, torch's 1e-2 default applies — 100x the configured
+            # value, which shrinks a purely linear predictor toward zero output.
+            weight_decay=self.config.get("weight_decay", 1e-4),
+        )
         loss_fn = nn.MSELoss()
         deadline = time.time() + max_minutes * 60 if max_minutes else None
         best, bad = float("inf"), 0
+        # Keep the best-validation weights. Early stopping only breaks out of
+        # the loop, so without this the checkpoint saved is the FINAL epoch —
+        # `patience` epochs past the optimum, i.e. a deliberately over-fit model.
+        best_state = None
         for _ in range(max_epochs):
             self.net.train()
             for batch in train_loader:
@@ -116,10 +127,13 @@ class DLinearModel(BaseModel):
             val = self._eval(val_loader, loss_fn)
             if val < best:
                 best, bad = val, 0
+                best_state = copy.deepcopy(self.net.state_dict())
             else:
                 bad += 1
                 if bad >= patience:
                     break
+        if best_state is not None:
+            self.net.load_state_dict(best_state)
         return self
 
     @torch.no_grad()

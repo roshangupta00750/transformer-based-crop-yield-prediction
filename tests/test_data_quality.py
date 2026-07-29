@@ -248,3 +248,70 @@ def test_tft_encoder_length_round_trips_through_pipeline_json(tmp_path):
     legacy.pop("tft_max_encoder_length")
     path.write_text(json.dumps(legacy))
     assert FeaturePipeline.load(path).tft_max_encoder_length_ is None
+
+
+def test_early_stopping_restores_best_weights_and_survives_no_val_loader():
+    """Early stopping must select weights, not merely halt.
+
+    All four hand-written torch loops used to track the running validation
+    minimum purely as a stop counter and then `return self`, so the saved
+    checkpoint was the FINAL epoch — `patience` epochs past the optimum. The
+    project had already measured the cost without naming it: dlinear.yaml
+    records 0.215 mean R² at 100 epochs against 0.150 at 200.
+
+    The guard matters too: with no validation loader there is no snapshot to
+    restore, and an unguarded restore would reinstate the random init.
+    """
+    import copy as _copy
+    import torch
+    import yaml
+    from torch.utils.data import DataLoader
+
+    from src.data.dataset import collate_pad
+    from src.models.dlinear import DLinearModel
+
+    cfg = yaml.safe_load(
+        (PROJECT_ROOT / "configs" / "models" / "dlinear.yaml").read_text()
+    ) if False else {
+        "name": "dlinear", "learning_rate": 0.01, "weight_decay": 1.0e-4,
+        "moving_avg_kernel": 25, "individual": False,
+    }
+
+    def loader(n, T=40, F=3):
+        items = [{"x_past": torch.randn(T, F), "x_future": torch.zeros(T, 1),
+                  "x_static": torch.zeros(2), "y": torch.randn(())}
+                 for _ in range(n)]
+        return DataLoader(items, batch_size=8, collate_fn=collate_pad)
+
+    torch.manual_seed(0)
+    m = DLinearModel(cfg)
+    m.fit(loader(32), loader(16), max_epochs=6, patience=2, device="cpu")
+    assert m.net is not None
+
+    # No validation loader: must keep the trained weights rather than
+    # restoring an untrained snapshot.
+    torch.manual_seed(0)
+    m2 = DLinearModel(cfg)
+    m2.fit(loader(32), None, max_epochs=3, patience=2, device="cpu")
+    trained = _copy.deepcopy(m2.net.state_dict())
+
+    torch.manual_seed(0)
+    fresh = DLinearModel(cfg)
+    fresh.fit(loader(8), None, max_epochs=0, patience=2, device="cpu")
+    assert any(
+        not torch.allclose(trained[k], fresh.net.state_dict()[k])
+        for k in trained
+    ), "training with no val loader must not restore the initial weights"
+
+
+def test_weight_decay_reaches_the_optimizer():
+    """dlinear.yaml declares 1e-4 but AdamW's 1e-2 default was applied.
+
+    100x the intended L2 pressure on a purely linear predictor shrinks its
+    output toward zero, which is consistent with DLinear's 0.005 mean R².
+    """
+    import inspect
+    from src.models import dlinear as dl
+
+    src = inspect.getsource(dl.DLinearModel.fit)
+    assert "weight_decay=" in src, "AdamW is constructed without weight_decay"

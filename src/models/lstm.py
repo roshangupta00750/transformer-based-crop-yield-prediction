@@ -6,6 +6,8 @@ hidden state, and projects to a scalar yield prediction.
 """
 from __future__ import annotations
 
+import copy
+
 from typing import Any
 
 import numpy as np
@@ -88,6 +90,10 @@ class LSTMModel(BaseModel):
 
         deadline = time.time() + max_minutes * 60 if max_minutes else None
         best_val, bad = float("inf"), 0
+        # Keep the best-validation weights. Early stopping only breaks out of
+        # the loop, so without this the checkpoint saved is the FINAL epoch —
+        # `patience` epochs past the optimum, i.e. a deliberately over-fit model.
+        best_state = copy.deepcopy(self.net.state_dict())
         for epoch in range(max_epochs):
             self.net.train()
             for batch in train_loader:
@@ -108,10 +114,13 @@ class LSTMModel(BaseModel):
             val = self._eval_loss(val_loader, loss_fn)
             if val < best_val:
                 best_val, bad = val, 0
+                best_state = copy.deepcopy(self.net.state_dict())
             else:
                 bad += 1
                 if bad >= patience:
                     break
+        if best_state is not None:
+            self.net.load_state_dict(best_state)
         return self
 
     @torch.no_grad()
