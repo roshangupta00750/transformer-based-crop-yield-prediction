@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=cyp-v3-retrain
-#SBATCH --partition=h100
-#SBATCH --gres=gpu:H100:1
+#SBATCH --partition=standard
+#SBATCH --qos=normal
+#SBATCH --gres=gpu:L40:1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
-#SBATCH --time=10:00:00
-#SBATCH --array=1-6
+#SBATCH --time=03:00:00
+#SBATCH --array=1-5   # TFT trains per-crop via sbatch_v3_train_tft_percrop_l40.sh
 #SBATCH --output=/home/s517868/slurm_logs/v3-retrain-%A_%a.out
 #SBATCH --error=/home/s517868/slurm_logs/v3-retrain-%A_%a.err
 
