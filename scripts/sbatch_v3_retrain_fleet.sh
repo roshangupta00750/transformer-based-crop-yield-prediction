@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=cyp-v3-retrain
-#SBATCH --partition=standard
+#SBATCH --partition=h100
 #SBATCH --qos=normal
-#SBATCH --gres=gpu:L40:1
+#SBATCH --gres=gpu:H100:1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=03:00:00
