@@ -21,11 +21,25 @@ from .registry import register
 def _flatten_batch(batch, n_months: int = 12) -> tuple[np.ndarray, np.ndarray]:
     """Convert a batch of variable-length time-series tensors into tabular form."""
     B = batch["x_past"].shape[0]
+    mask = batch.get("mask")
     feats = []
     for i in range(B):
         past = batch["x_past"][i].cpu().numpy()
         static = batch["x_static"][i].cpu().numpy()
-        # Aggregate by 12 equal-length time buckets (proxy for months)
+        # Bucket the VALID span, not the padded one. collate_pad pads every
+        # sample to the longest phenology window (220 days), so bucketing the
+        # padded axis at fixed absolute indices left the trailing buckets
+        # identically zero for short-season crops — 320 of 974 features dead
+        # for summer_barley and oats, which could reach only 55.7 % of the
+        # booster's leaves. It also made bucket k mean a different calendar
+        # day per crop, inside a pooled model with no crop identifier.
+        # Slicing first makes bucket k the same relative phenological phase
+        # for every crop.
+        if mask is not None:
+            valid = int(mask[i].sum().item())
+            if valid > 0:
+                past = past[:valid]
+        # Aggregate into 12 equal-length phenological buckets
         chunks = np.array_split(past, n_months, axis=0)
         agg = np.concatenate([
             np.concatenate([c.mean(0), c.std(0), c.min(0), c.max(0)])

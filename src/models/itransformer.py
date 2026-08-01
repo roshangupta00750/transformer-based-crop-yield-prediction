@@ -15,6 +15,7 @@ import torch
 import torch.nn as nn
 
 from .base import BaseModel
+from ._masking import resample_valid
 from .registry import register
 
 
@@ -36,9 +37,10 @@ class _ITransformerNet(nn.Module):
         self.norm = nn.LayerNorm(d_model)
         self.proj = nn.Linear(d_model * n_channels, 1)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (B, T_var, C) -> (B, C, seq_len)
-        x = self.adapt(x.transpose(1, 2))
+    def forward(self, x: torch.Tensor,
+                mask: torch.Tensor | None = None) -> torch.Tensor:
+        # x: (B, T_var, C) -> (B, C, seq_len), padding excluded
+        x = resample_valid(x, mask, self.adapt)
         tokens = self.var_embed(x)                # (B, C, D)
         encoded = self.encoder(tokens)            # (B, C, D)
         encoded = self.norm(encoded)              # LayerNorm on D
@@ -84,8 +86,10 @@ class ITransformerModel(BaseModel):
             self.net.train()
             for batch in train_loader:
                 x = torch.cat([batch["x_past"], batch["x_future"]], dim=-1).to(device)
+                msk = batch.get("mask")
+                msk = msk.to(device) if msk is not None else None
                 y = batch["y"].to(device)
-                pred = self.net(x)
+                pred = self.net(x, msk)
                 loss = loss_fn(pred, y)
                 opt.zero_grad(); loss.backward(); opt.step()
 
@@ -111,8 +115,10 @@ class ITransformerModel(BaseModel):
         total, n = 0.0, 0
         for batch in loader:
             x = torch.cat([batch["x_past"], batch["x_future"]], dim=-1).to(self.device)
+            msk = batch.get("mask")
+            msk = msk.to(self.device) if msk is not None else None
             y = batch["y"].to(self.device)
-            total += loss_fn(self.net(x), y).item() * len(y)
+            total += loss_fn(self.net(x, msk), y).item() * len(y)
             n += len(y)
         return total / max(n, 1)
 
@@ -122,7 +128,9 @@ class ITransformerModel(BaseModel):
         out = []
         for batch in loader:
             x = torch.cat([batch["x_past"], batch["x_future"]], dim=-1).to(self.device)
-            out.append(self.net(x).cpu().numpy())
+            msk = batch.get("mask")
+            msk = msk.to(self.device) if msk is not None else None
+            out.append(self.net(x, msk).cpu().numpy())
         return np.concatenate(out)
 
     def save(self, path):

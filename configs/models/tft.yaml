@@ -11,3 +11,12 @@ output_size: 1
 loss: "mae"
 learning_rate: 0.0003     # was 1e-3; lower LR for MAE stability
 batch_size: 128
+
+# Per-model budget override. Every TFT run so far terminated at exactly the
+# shared 60-minute cap (fit_seconds 3612.6 = 60.21 min) after roughly 2-3 of
+# its configured 200 epochs, so its reported R² was a wall-clock artefact
+# rather than a measurement of the architecture. Now that validation actually
+# works (from_dataset + EarlyStopping + ModelCheckpoint), a larger budget can
+# be spent safely: training stops on the val plateau if it arrives first, and
+# the weights kept are the best-validation ones either way.
+max_minutes: 180

@@ -17,6 +17,7 @@ import torch
 import torch.nn as nn
 
 from .base import BaseModel
+from ._masking import resample_valid
 from .registry import register
 
 
@@ -55,9 +56,13 @@ class _PatchTSTNet(nn.Module):
         self.norm = nn.LayerNorm(d_model)
         self.proj = nn.Linear(d_model * n_patches * n_channels, 1)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (B, T_var, C) -> (B, C, seq_len)
-        xc = self.adapt(x.transpose(1, 2))
+    def forward(self, x: torch.Tensor,
+                mask: torch.Tensor | None = None) -> torch.Tensor:
+        # Resample each sample's VALID span to seq_len. Feeding the padded
+        # tensor put 20 of 54 patches (37 %) of a summer_barley sample on pure
+        # padding — every one projecting to the same constant token — and let
+        # real patches attend to them.
+        xc = resample_valid(x, mask, self.adapt)
         patches = self.embed(xc)                     # (B, C, N, D)
         B, C, N, D = patches.shape
         tokens = patches.reshape(B * C, N, D)
@@ -105,8 +110,10 @@ class PatchTSTModel(BaseModel):
             self.net.train()
             for batch in train_loader:
                 x = torch.cat([batch["x_past"], batch["x_future"]], dim=-1).to(device)
+                msk = batch.get("mask")
+                msk = msk.to(device) if msk is not None else None
                 y = batch["y"].to(device)
-                pred = self.net(x)
+                pred = self.net(x, msk)
                 loss = loss_fn(pred, y)
                 opt.zero_grad(); loss.backward(); opt.step()
 
@@ -132,8 +139,10 @@ class PatchTSTModel(BaseModel):
         total, n = 0.0, 0
         for batch in loader:
             x = torch.cat([batch["x_past"], batch["x_future"]], dim=-1).to(self.device)
+            msk = batch.get("mask")
+            msk = msk.to(self.device) if msk is not None else None
             y = batch["y"].to(self.device)
-            total += loss_fn(self.net(x), y).item() * len(y)
+            total += loss_fn(self.net(x, msk), y).item() * len(y)
             n += len(y)
         return total / max(n, 1)
 
@@ -143,7 +152,9 @@ class PatchTSTModel(BaseModel):
         out = []
         for batch in loader:
             x = torch.cat([batch["x_past"], batch["x_future"]], dim=-1).to(self.device)
-            out.append(self.net(x).cpu().numpy())
+            msk = batch.get("mask")
+            msk = msk.to(self.device) if msk is not None else None
+            out.append(self.net(x, msk).cpu().numpy())
         return np.concatenate(out)
 
     def save(self, path):

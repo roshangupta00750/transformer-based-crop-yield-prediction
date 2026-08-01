@@ -16,6 +16,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from .base import BaseModel
+from ._masking import resample_valid
 from .registry import register
 
 
@@ -52,12 +53,14 @@ class _DLinearNet(nn.Module):
             self.linear_t = nn.Linear(seq_len * n_channels, 1)
             self.linear_s = nn.Linear(seq_len * n_channels, 1)
 
-    def _to_fixed(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (B, T, C) -> (B, seq_len, C)
-        return self.adapt(x.transpose(1, 2)).transpose(1, 2)
+    def _to_fixed(self, x: torch.Tensor,
+                  mask: torch.Tensor | None = None) -> torch.Tensor:
+        # x: (B, T, C) -> (B, seq_len, C), padding excluded
+        return resample_valid(x, mask, self.adapt).transpose(1, 2)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self._to_fixed(x)
+    def forward(self, x: torch.Tensor,
+                mask: torch.Tensor | None = None) -> torch.Tensor:
+        x = self._to_fixed(x, mask)
         trend = self.decomp(x)
         seasonal = x - trend
         B, T, C = x.shape
@@ -115,8 +118,10 @@ class DLinearModel(BaseModel):
             self.net.train()
             for batch in train_loader:
                 x = torch.cat([batch["x_past"], batch["x_future"]], dim=-1).to(device)
+                msk = batch.get("mask")
+                msk = msk.to(device) if msk is not None else None
                 y = batch["y"].to(device)
-                pred = self.net(x)
+                pred = self.net(x, msk)
                 loss = loss_fn(pred, y)
                 opt.zero_grad(); loss.backward(); opt.step()
 
@@ -142,8 +147,10 @@ class DLinearModel(BaseModel):
         total, n = 0.0, 0
         for batch in loader:
             x = torch.cat([batch["x_past"], batch["x_future"]], dim=-1).to(self.device)
+            msk = batch.get("mask")
+            msk = msk.to(self.device) if msk is not None else None
             y = batch["y"].to(self.device)
-            total += loss_fn(self.net(x), y).item() * len(y)
+            total += loss_fn(self.net(x, msk), y).item() * len(y)
             n += len(y)
         return total / max(n, 1)
 
@@ -153,7 +160,9 @@ class DLinearModel(BaseModel):
         out = []
         for batch in loader:
             x = torch.cat([batch["x_past"], batch["x_future"]], dim=-1).to(self.device)
-            out.append(self.net(x).cpu().numpy())
+            msk = batch.get("mask")
+            msk = msk.to(self.device) if msk is not None else None
+            out.append(self.net(x, msk).cpu().numpy())
         return np.concatenate(out)
 
     def save(self, path):

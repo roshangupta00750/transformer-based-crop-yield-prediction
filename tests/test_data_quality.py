@@ -315,3 +315,45 @@ def test_weight_decay_reaches_the_optimizer():
 
     src = inspect.getsource(dl.DLinearModel.fit)
     assert "weight_decay=" in src, "AdamW is constructed without weight_decay"
+
+
+def test_zero_padding_is_excluded_from_model_inputs():
+    """collate_pad pads to the longest phenology window; models must not see it.
+
+    Every sequence is padded to 220 days (winter wheat's window), so a
+    summer_barley sample is 38% zeros. Three architectures pooled straight
+    over the padded axis and XGBoost bucketed it at fixed absolute indices,
+    which left 320 of its 974 features identically zero for short-season
+    crops.
+    """
+    import torch
+
+    from src.models._masking import resample_valid
+    from src.models.xgboost_model import _flatten_batch
+
+    T_valid, T_pad, C = 136, 220, 4
+    torch.manual_seed(0)
+    real = torch.randn(1, T_valid, C)
+    padded = torch.zeros(1, T_pad, C)
+    padded[0, :T_valid] = real[0]
+    mask = torch.zeros(1, T_pad, dtype=torch.bool)
+    mask[0, :T_valid] = True
+
+    # Pooling the padded tensor with a mask must equal pooling the real span.
+    pool = torch.nn.AdaptiveAvgPool1d(64)
+    got = resample_valid(padded, mask, pool)
+    want = resample_valid(real, torch.ones(1, T_valid, dtype=torch.bool), pool)
+    torch.testing.assert_close(got, want)
+
+    # Same invariant for the XGBoost featuriser.
+    Xp, _ = _flatten_batch({"x_past": padded, "x_static": torch.zeros(1, 3),
+                            "y": torch.zeros(1), "mask": mask})
+    Xt, _ = _flatten_batch({"x_past": real, "x_static": torch.zeros(1, 3),
+                            "y": torch.zeros(1),
+                            "mask": torch.ones(1, T_valid, dtype=torch.bool)})
+    assert np.abs(Xp - Xt).max() == 0.0
+
+    # Without a mask the padding leaks through — this is what used to happen.
+    Xn, _ = _flatten_batch({"x_past": padded, "x_static": torch.zeros(1, 3),
+                            "y": torch.zeros(1)})
+    assert (Xn == 0).sum() > 0.25 * Xn.size
