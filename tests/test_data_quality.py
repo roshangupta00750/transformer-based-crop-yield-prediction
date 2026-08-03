@@ -357,3 +357,48 @@ def test_zero_padding_is_excluded_from_model_inputs():
     Xn, _ = _flatten_batch({"x_past": padded, "x_static": torch.zeros(1, 3),
                             "y": torch.zeros(1)})
     assert (Xn == 0).sum() > 0.25 * Xn.size
+
+
+def test_crop_identity_is_an_explicit_feature():
+    """Pooled multi-crop models must be told which crop they are predicting.
+
+    Yields span ~36 dt/ha (winter rapeseed) to ~660 (sugar beet), but nothing
+    in features.static identified the crop. The models had been inferring it
+    from the length of collate_pad's zero tail — an artefact that the padding
+    fix legitimately removed, costing XGBoost 0.047 mean R².
+    """
+    from src.data.dataset import (add_crop_indicators, build_feature_spec,
+                                  crop_indicator_columns)
+
+    cfg = {
+        "crops": ["winter_wheat", "sugar_beet"],
+        "features": {
+            "past_observed": ["ndvi"],
+            "static": ["sand", "crop_is_winter_wheat", "crop_is_sugar_beet"],
+            "known_future": [], "excluded": [],
+        },
+    }
+    df = pd.DataFrame({
+        "landkreis": ["A", "A", "B"],
+        "crop": ["winter_wheat", "sugar_beet", "winter_wheat"],
+        "ndvi": [0.4, 0.5, 0.6], "sand": [0.3, 0.3, 0.4],
+    })
+    out = add_crop_indicators(df, cfg)
+
+    assert crop_indicator_columns(cfg) == [
+        "crop_is_winter_wheat", "crop_is_sugar_beet"]
+    # exactly one indicator hot per row
+    hot = out[crop_indicator_columns(cfg)].sum(axis=1)
+    assert (hot == 1).all()
+    assert out.loc[0, "crop_is_winter_wheat"] == 1
+    assert out.loc[0, "crop_is_sugar_beet"] == 0
+
+    # and they survive into the feature spec the models actually consume
+    spec = build_feature_spec(out, cfg)
+    assert "crop_is_sugar_beet" in spec.static
+
+    # A frame containing only one crop must still emit BOTH columns, so the
+    # encoding is identical at train and per-crop eval time.
+    single = add_crop_indicators(df[df.crop == "winter_wheat"], cfg)
+    assert "crop_is_sugar_beet" in single.columns
+    assert (single["crop_is_sugar_beet"] == 0).all()

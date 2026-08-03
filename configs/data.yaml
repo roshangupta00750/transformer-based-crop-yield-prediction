@@ -73,6 +73,19 @@ features:
     - slope_std
     - aspect_cos_mean
     - aspect_sin_mean
+    # One-hot crop identity. Pooled multi-crop models previously had no
+    # way to tell which crop a sample was; they had been reading it off the
+    # zero-padding tail length, which the padding fix removed.
+    - crop_is_winter_wheat
+    - crop_is_winter_barley
+    - crop_is_rye
+    - crop_is_triticale
+    - crop_is_winter_rapeseed
+    - crop_is_summer_barley
+    - crop_is_oats
+    - crop_is_silage_maize
+    - crop_is_potatoes
+    - crop_is_sugar_beet
   known_future:
     - sin_doy
     - cos_doy

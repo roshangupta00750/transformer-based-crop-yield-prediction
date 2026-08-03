@@ -638,6 +638,40 @@ def filter_incomplete_sequences(
     return df.loc[keep].copy()
 
 
+def crop_indicator_columns(data_config: dict) -> list[str]:
+    """Names of the one-hot crop indicators, in the order data.yaml lists."""
+    return [f"crop_is_{c}" for c in data_config["crops"]]
+
+
+def add_crop_indicators(df: pd.DataFrame, data_config: dict) -> pd.DataFrame:
+    """Attach one-hot crop indicators.
+
+    These models are trained pooled across all ten crops, whose yields span
+    ~36 dt/ha (winter rapeseed) to ~660 (sugar beet), yet nothing in the
+    feature set identified the crop — `features.static` carried soil, terrain
+    and landkreis_id only. The models had been inferring crop identity from an
+    artefact: collate_pad padded every sequence to the longest phenology
+    window, so the length of the zero tail was a de-facto crop code. Excluding
+    that padding (as correctness requires) removed the signal with it, which
+    is why XGBoost lost 0.047 mean R² when the padding fix landed.
+
+    One-hot rather than an integer code: an ordinal `crop_id` would be
+    z-scored and fed as a continuous covariate, implying an ordering between
+    crops that does not exist — the same defect `landkreis_id` already has.
+    Ten binary columns cost little and are unambiguous for both trees and
+    networks.
+
+    Columns come from the configured crop list, so the encoding is identical
+    at train and eval time without depending on which crops a given frame
+    happens to contain.
+    """
+    out = df.copy()
+    crop_col = out["crop"].astype(str)
+    for crop in data_config["crops"]:
+        out[f"crop_is_{crop}"] = (crop_col == crop).astype("int8")
+    return out
+
+
 def prepare_modeling_frame(df: pd.DataFrame, data_config: dict) -> pd.DataFrame:
     """Apply the shared crop window and data-quality rules."""
     phenology = data_config["phenology"]
@@ -645,7 +679,8 @@ def prepare_modeling_frame(df: pd.DataFrame, data_config: dict) -> pd.DataFrame:
     min_coverage = float(
         data_config.get("quality", {}).get("min_sequence_coverage", 0.90)
     )
-    return filter_incomplete_sequences(out, phenology, min_coverage)
+    out = filter_incomplete_sequences(out, phenology, min_coverage)
+    return add_crop_indicators(out, data_config)
 
 
 # --------------------------------------------------------------------------- #
