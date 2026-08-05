@@ -24,7 +24,8 @@ class _LSTMNet(nn.Module):
                  hidden_size: int, num_layers: int, dropout: float,
                  bidirectional: bool):
         super().__init__()
-        input_size = n_past + n_future + n_static
+        # Statics no longer enter the recurrent input; they join at the head.
+        input_size = n_past + n_future
         self.lstm = nn.LSTM(
             input_size=input_size,
             hidden_size=hidden_size,
@@ -33,22 +34,33 @@ class _LSTMNet(nn.Module):
             batch_first=True,
             bidirectional=bidirectional,
         )
-        out_dim = hidden_size * (2 if bidirectional else 1)
+        out_dim = hidden_size * (2 if bidirectional else 1) + n_static
         self.head = nn.Sequential(
             nn.Linear(out_dim, 64), nn.ReLU(),
             nn.Dropout(dropout), nn.Linear(64, 1),
         )
 
     def forward(self, x_past, x_future, x_static, mask=None):
+        # Statics are concatenated to the final hidden state, NOT broadcast
+        # across the time axis. Broadcasting repeated all 24 static values at
+        # every one of ~220 steps, making them 52 % of the recurrent input
+        # width while carrying no time-varying information, and it forced the
+        # LSTM to spend capacity learning to ignore the redundancy.
+        #
+        # It also made the benchmark unfair: DLinear, PatchTST and
+        # iTransformer inject statics at the head, so comparing LSTM against
+        # them confounded architecture with static-injection strategy. All
+        # four now use the same head injection.
         B, T, _ = x_past.shape
-        static = x_static.unsqueeze(1).expand(-1, T, -1)
-        x = torch.cat([x_past, x_future, static], dim=-1)
+        x = torch.cat([x_past, x_future], dim=-1)
         out, _ = self.lstm(x)
         if mask is not None:
             lengths = mask.sum(dim=1).clamp(min=1) - 1
             last = out[torch.arange(B, device=out.device), lengths]
         else:
             last = out[:, -1]
+        if x_static is not None and x_static.shape[-1]:
+            last = torch.cat([last, x_static], dim=-1)
         return self.head(last).squeeze(-1)
 
 
