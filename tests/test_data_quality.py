@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import torch
@@ -16,6 +18,9 @@ from src.data.dataset import (
 )
 from src.training.tft_adapter import transform_tft_features
 from src.utils import load_data_config
+
+
+_REPO = Path(__file__).resolve().parents[1]
 
 
 def test_unsafe_features_are_excluded() -> None:
@@ -402,3 +407,63 @@ def test_crop_identity_is_an_explicit_feature():
     single = add_crop_indicators(df[df.crop == "winter_wheat"], cfg)
     assert "crop_is_sugar_beet" in single.columns
     assert (single["crop_is_sugar_beet"] == 0).all()
+
+
+def test_every_model_actually_consumes_static_features():
+    """DLinear, PatchTST and iTransformer silently discarded all statics.
+
+    They built their input as cat([x_past, x_future]) and never referenced
+    batch["x_static"], so soil, terrain, landkreis_id and the crop one-hot
+    indicators reached nothing. The symptom was a retrain in which four
+    models' per-crop R² was bit-identical to the previous run after ten new
+    features were added — adding inputs to a model that reads no statics
+    cannot change its output.
+    """
+    import torch
+    import yaml
+    from torch.utils.data import DataLoader
+
+    from src.data.dataset import collate_pad
+    from src.models.dlinear import DLinearModel
+    from src.models.itransformer import ITransformerModel
+    from src.models.patchtst import PatchTSTModel
+
+    def loader(n=16, T=40, F=3, S=5):
+        items = [{"x_past": torch.randn(T, F), "x_future": torch.zeros(T, 1),
+                  "x_static": torch.randn(S), "y": torch.randn(())}
+                 for _ in range(n)]
+        return DataLoader(items, batch_size=8, collate_fn=collate_pad)
+
+    for name, cls in [("dlinear", DLinearModel),
+                      ("patchtst", PatchTSTModel),
+                      ("itransformer", ITransformerModel)]:
+        cfg = yaml.safe_load(
+            (_REPO / "configs" / "models" / f"{name}.yaml").read_text())
+        torch.manual_seed(0)
+        m = cls(cfg)
+        m.fit(loader(), None, max_epochs=1, patience=1, device="cpu")
+        assert getattr(m.net, "n_static", 0) == 5, f"{name} ignored n_static"
+
+        b = next(iter(loader(8)))
+        x = torch.cat([b["x_past"], b["x_future"]], dim=-1)
+        with torch.no_grad():
+            with_static = m.net(x, b["mask"], b["x_static"])
+            without = m.net(x, b["mask"], torch.zeros_like(b["x_static"]))
+        assert float((with_static - without).abs().mean()) > 1e-8, (
+            f"{name}: zeroing the static features did not change the output")
+
+
+def test_model_configs_do_not_shadow_the_feature_policy():
+    """configs/data.yaml is the single source of truth for the feature set.
+
+    lstm.yaml used to pin static_features to 7 entries, which silently
+    bypassed data.yaml and excluded the crop indicators from LSTM alone.
+    """
+    import yaml
+
+    for name in ["xgboost", "dlinear", "lstm", "patchtst", "itransformer", "tft"]:
+        cfg = yaml.safe_load(
+            (_REPO / "configs" / "models" / f"{name}.yaml").read_text())
+        assert cfg.get("static_features") is None, (
+            f"{name}.yaml overrides static_features and will shadow data.yaml"
+        )

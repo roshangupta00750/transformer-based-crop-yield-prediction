@@ -38,7 +38,8 @@ class _MovingAvg(nn.Module):
 
 class _DLinearNet(nn.Module):
     def __init__(self, seq_len: int, n_channels: int,
-                 kernel_size: int = 25, individual: bool = False):
+                 kernel_size: int = 25, individual: bool = False,
+                 n_static: int = 0):
         super().__init__()
         self.individual = individual
         self.seq_len = seq_len
@@ -52,6 +53,15 @@ class _DLinearNet(nn.Module):
         else:
             self.linear_t = nn.Linear(seq_len * n_channels, 1)
             self.linear_s = nn.Linear(seq_len * n_channels, 1)
+        # Static covariates (soil, terrain, crop identity) enter here, at the
+        # head, rather than being broadcast across the time axis. Broadcasting
+        # would repeat each value ~220 times and drown it in the sequence
+        # features; a dedicated head term keeps them on equal footing.
+        # These were previously DROPPED ENTIRELY — the model built its input
+        # as cat([x_past, x_future]) and never referenced x_static, so soil,
+        # terrain, landkreis_id and the crop one-hots reached nothing.
+        self.n_static = n_static
+        self.linear_static = nn.Linear(n_static, 1) if n_static else None
 
     def _to_fixed(self, x: torch.Tensor,
                   mask: torch.Tensor | None = None) -> torch.Tensor:
@@ -59,7 +69,8 @@ class _DLinearNet(nn.Module):
         return resample_valid(x, mask, self.adapt).transpose(1, 2)
 
     def forward(self, x: torch.Tensor,
-                mask: torch.Tensor | None = None) -> torch.Tensor:
+                mask: torch.Tensor | None = None,
+                x_static: torch.Tensor | None = None) -> torch.Tensor:
         x = self._to_fixed(x, mask)
         trend = self.decomp(x)
         seasonal = x - trend
@@ -70,7 +81,10 @@ class _DLinearNet(nn.Module):
         else:
             t = self.linear_t(trend.reshape(B, -1)).squeeze(-1)
             s = self.linear_s(seasonal.reshape(B, -1)).squeeze(-1)
-        return t + s
+        out = t + s
+        if self.linear_static is not None and x_static is not None:
+            out = out + self.linear_static(x_static).squeeze(-1)
+        return out
 
 
 @register
@@ -90,12 +104,13 @@ class DLinearModel(BaseModel):
         import time
         self.device = device
         first = next(iter(train_loader))
+        n_static = first["x_static"].shape[-1]
         T = first["x_past"].shape[1]
         # DLinear processes past + future stacked along channel axis.
         n_channels = first["x_past"].shape[-1] + first["x_future"].shape[-1]
         self.seq_len = T
         self.net = _DLinearNet(
-            seq_len=T, n_channels=n_channels,
+            seq_len=T, n_channels=n_channels, n_static=n_static,
             kernel_size=self.config["moving_avg_kernel"],
             individual=self.config["individual"],
         ).to(device)
@@ -120,8 +135,9 @@ class DLinearModel(BaseModel):
                 x = torch.cat([batch["x_past"], batch["x_future"]], dim=-1).to(device)
                 msk = batch.get("mask")
                 msk = msk.to(device) if msk is not None else None
+                xs = batch["x_static"].to(device)
                 y = batch["y"].to(device)
-                pred = self.net(x, msk)
+                pred = self.net(x, msk, xs)
                 loss = loss_fn(pred, y)
                 opt.zero_grad(); loss.backward(); opt.step()
 
@@ -149,8 +165,9 @@ class DLinearModel(BaseModel):
             x = torch.cat([batch["x_past"], batch["x_future"]], dim=-1).to(self.device)
             msk = batch.get("mask")
             msk = msk.to(self.device) if msk is not None else None
+            xs = batch["x_static"].to(self.device)
             y = batch["y"].to(self.device)
-            total += loss_fn(self.net(x, msk), y).item() * len(y)
+            total += loss_fn(self.net(x, msk, xs), y).item() * len(y)
             n += len(y)
         return total / max(n, 1)
 
@@ -162,11 +179,13 @@ class DLinearModel(BaseModel):
             x = torch.cat([batch["x_past"], batch["x_future"]], dim=-1).to(self.device)
             msk = batch.get("mask")
             msk = msk.to(self.device) if msk is not None else None
-            out.append(self.net(x, msk).cpu().numpy())
+            xs = batch["x_static"].to(self.device)
+            out.append(self.net(x, msk, xs).cpu().numpy())
         return np.concatenate(out)
 
     def save(self, path):
         torch.save({
+            "n_static": getattr(self.net, "n_static", 0),
             "state_dict": self.net.state_dict(),
             "config": self.config,
             "seq_len": self.seq_len,
@@ -181,6 +200,7 @@ class DLinearModel(BaseModel):
         self.seq_len = ckpt["seq_len"]
         self.net = _DLinearNet(
             seq_len=ckpt["seq_len"], n_channels=ckpt["n_channels"],
+            n_static=ckpt.get("n_static", 0),
             kernel_size=self.config["moving_avg_kernel"],
             individual=self.config["individual"],
         )

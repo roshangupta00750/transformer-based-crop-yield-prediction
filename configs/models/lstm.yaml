@@ -10,11 +10,8 @@ batch_size: 128
 # on top of the original 6 diluted the temporal signal (regression 0.502 →
 # 0.294 on julia2 vs samal). Keep LSTM restricted to the original 6 soil +
 # landkreis statics; other models use the safe static list in data.yaml.
-static_features:
-  - sand
-  - clay
-  - soc
-  - ph
-  - bulk_density
-  - soil_imputed
-  - landkreis_id
+# static_features override REMOVED. It pinned the list to 7 entries and so
+# silently bypassed configs/data.yaml, which is meant to be the single source
+# of truth for the leakage-safe feature set. The immediate effect was that
+# LSTM never received the crop one-hot indicators added there; it would also
+# have shadowed any future addition. data.yaml now governs.
