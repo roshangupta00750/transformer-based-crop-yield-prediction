@@ -61,7 +61,6 @@ SECTIONS = {
     ],
     "Reproduce": [
         _page(PAGES / "17_Train.py", "Train Models"),
-        _page(PAGES / "18_Geographic.py", "Geographic Predictions"),
     ],
     "Supplementary": [
         _page(PAGES / "19_Recommendation.py", "Multi-criteria Recommendation"),

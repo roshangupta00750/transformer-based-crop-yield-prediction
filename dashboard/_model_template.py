@@ -237,6 +237,7 @@ def _predict_test_set_tft(crop: str,
     return out, None
 
 
+@st.cache_data(ttl=300, show_spinner="Running model predictions…")
 def _predict_test_set(model: str, crop: str,
                       cutoff_doy: int | None = None,
                       years: list[int] | None = None) -> tuple[pd.DataFrame, dict | None]:
