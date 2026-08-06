@@ -46,6 +46,10 @@ def main() -> None:
                     help="Predict absolute yield z-scored globally (not within-"
                          "district anomaly). Pair with landkreis_id as a static "
                          "feature so the model can recover district baselines.")
+    ap.add_argument("--config-name", default=None,
+                    help="Model config file to load (default: --model). Lets an "
+                         "ablation reuse a builder with a different config, e.g. "
+                         "--model itransformer --config-name itransformer_temporal.")
     ap.add_argument("--suffix", default="",
                     help="Appended to checkpoint filename, e.g. '_abs' for the "
                          "absolute-yield track.")
@@ -53,7 +57,7 @@ def main() -> None:
 
     data_cfg = load_data_config()
     exp_cfg = load_experiment_config()
-    model_cfg = load_model_config(args.model)
+    model_cfg = load_model_config(args.config_name or args.model)
     set_seed(exp_cfg["seed"])
     device = pick_device(exp_cfg.get("device", "auto"))
 

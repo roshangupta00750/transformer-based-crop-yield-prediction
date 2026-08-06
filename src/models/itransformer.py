@@ -22,12 +22,30 @@ from .registry import register
 class _ITransformerNet(nn.Module):
     def __init__(self, n_channels: int, seq_len: int,
                  d_model: int, n_heads: int, n_layers: int,
-                 d_ff: int, dropout: float, n_static: int = 0):
+                 d_ff: int, dropout: float, n_static: int = 0,
+                 attention_axis: str = "variate"):
         super().__init__()
+        if attention_axis not in ("variate", "temporal"):
+            raise ValueError(f"attention_axis must be variate|temporal, "
+                             f"got {attention_axis!r}")
         self.seq_len = seq_len
         self.n_channels = n_channels
+        # ABLATION AXIS. iTransformer's defining choice is that a TOKEN IS A
+        # VARIATE: the series is transposed so attention runs across channels
+        # rather than across time. Setting attention_axis="temporal" removes
+        # exactly that transpose and nothing else — same depth, heads,
+        # d_model, d_ff, dropout, optimiser and budget — turning the model
+        # into a conventional time-attention encoder.
+        #
+        # This isolates the claim. Comparing iTransformer to PatchTST or TFT
+        # confounds the attention axis with every other architectural
+        # difference between them; comparing iTransformer to itself does not.
+        self.attention_axis = attention_axis
         self.adapt = nn.AdaptiveAvgPool1d(seq_len)
-        self.var_embed = nn.Linear(seq_len, d_model)
+        # variate: each of C channels embeds its length-seq_len series
+        # temporal: each of seq_len steps embeds its C-vector
+        self.var_embed = nn.Linear(
+            seq_len if attention_axis == "variate" else n_channels, d_model)
         layer = nn.TransformerEncoderLayer(
             d_model=d_model, nhead=n_heads, dim_feedforward=d_ff,
             dropout=dropout, batch_first=True, activation="gelu",
@@ -61,18 +79,24 @@ class _ITransformerNet(nn.Module):
         # gating, not addition — left as future work. Set use_static_head:
         # true in the model config to re-enable the additive path.
         self.n_static = n_static
-        self.proj = nn.Linear(d_model * n_channels + n_static, 1)
+        n_tokens = n_channels if attention_axis == "variate" else seq_len
+        self.n_tokens = n_tokens
+        self.proj = nn.Linear(d_model * n_tokens + n_static, 1)
 
     def forward(self, x: torch.Tensor,
                 mask: torch.Tensor | None = None,
                 x_static: torch.Tensor | None = None) -> torch.Tensor:
         # x: (B, T_var, C) -> (B, C, seq_len), padding excluded
         x = resample_valid(x, mask, self.adapt)
-        tokens = self.var_embed(x)                # (B, C, D)
+        if self.attention_axis == "temporal":
+            # (B, C, seq_len) -> (B, seq_len, C): tokens become timesteps, so
+            # the encoder attends across time instead of across variates.
+            x = x.transpose(1, 2)
+        tokens = self.var_embed(x)                # (B, n_tokens, D)
         encoded = self.encoder(tokens)            # (B, C, D)
         encoded = self.norm(encoded)              # LayerNorm on D
-        B, C, D = encoded.shape
-        flat = encoded.reshape(B, C * D)
+        B, N, D = encoded.shape
+        flat = encoded.reshape(B, N * D)
         if self.n_static and x_static is not None:
             flat = torch.cat([flat, x_static], dim=-1)
         return self.proj(flat).squeeze(-1)
@@ -101,6 +125,7 @@ class ITransformerModel(BaseModel):
         c = self.config
         self.net = _ITransformerNet(
             n_channels=C, seq_len=T, n_static=n_static,
+            attention_axis=self.config.get("attention_axis", "variate"),
             d_model=c["d_model"], n_heads=c["n_heads"],
             n_layers=c["n_layers"], d_ff=c["d_ff"], dropout=c["dropout"],
         ).to(device)
@@ -171,6 +196,7 @@ class ITransformerModel(BaseModel):
     def save(self, path):
         torch.save({
             "n_static": getattr(self.net, "n_static", 0),
+            "attention_axis": getattr(self.net, "attention_axis", "variate"),
             "state_dict": self.net.state_dict(),
             "config": self.config,
             "seq_len": self.net.seq_len,
@@ -186,6 +212,7 @@ class ITransformerModel(BaseModel):
             d_model=c["d_model"], n_heads=c["n_heads"],
             n_layers=c["n_layers"], d_ff=c["d_ff"], dropout=c["dropout"],
             n_static=ckpt.get("n_static", 0),
+            attention_axis=ckpt.get("attention_axis", "variate"),
         )
         self.net.load_state_dict(ckpt["state_dict"])
         return self

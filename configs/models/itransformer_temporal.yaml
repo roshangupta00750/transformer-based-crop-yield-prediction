@@ -1,0 +1,29 @@
+# ATTENTION-AXIS ABLATION — temporal
+#
+# Identical to itransformer.yaml except attention_axis. Both arms have
+# exactly 428,801 parameters and a bit-identical attention stack
+# (397,440 encoder params): the embedding and projection sizes swap
+# (seq_len <-> n_channels), so capacity is held constant and only the
+# axis differs.
+#
+#   variate  : a TOKEN IS A VARIATE  -> attention across channels
+#   temporal : a TOKEN IS A TIMESTEP -> attention across time
+#
+# Comparing iTransformer to PatchTST or TFT confounds the attention axis
+# with every other architectural difference between them. Comparing the
+# model against itself does not, which is what the paper's claim needs.
+# iTransformer (Liu et al., ICLR 2024)
+name: itransformer
+d_model: 128
+n_heads: 8
+n_layers: 3
+d_ff: 256
+dropout: 0.15            # bumped from 0.10 for regularization
+learning_rate: 0.0005
+batch_size: 128
+weight_decay: 0.05       # plumbed through AdamW in src/models/itransformer.py
+# Per-model budget — slight regression at 200/20, sweet spot is 120/15
+max_epochs: 120
+early_stopping_patience: 15
+
+attention_axis: temporal
