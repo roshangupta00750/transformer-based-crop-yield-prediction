@@ -69,3 +69,9 @@ results/checkpoints_archive/
 results/checkpoints/_pre_landfeatures_*/
 results/logs/
 *.py.bak
+
+# Deleted page. Something outside git (an editor buffer) keeps rewriting it to
+# disk in a state that raises SyntaxError on U+2014 outside a string literal,
+# which breaks `compileall` and the preflight gate. It is not registered in
+# nav.py and Streamlit never serves it.
+dashboard/pages/01_Problem.py

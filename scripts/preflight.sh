@@ -41,10 +41,16 @@ else
   bad "pytest — see /tmp/pf_tests.log"; tail -5 /tmp/pf_tests.log | sed 's/^/        /'
 fi
 
-if (cd "$LROOT" && "$PY" -m compileall -q dashboard scripts src tests >/tmp/pf_compile.log 2>&1); then
-  ok "compileall"
+# Compile only TRACKED sources. Untracked scratch files are never rsynced to
+# the cluster, so they cannot break a job; including them let a stray editor
+# buffer (dashboard/pages/01_Problem.py, rewritten to disk seconds after every
+# deletion) block submission of work that was otherwise ready.
+if (cd "$LROOT" && git ls-files 'src/**/*.py' 'scripts/*.py' 'dashboard/**/*.py' \
+      'dashboard/*.py' 'tests/*.py' 2>/dev/null | tr '\n' '\0' \
+      | xargs -0 "$PY" -m py_compile >/tmp/pf_compile.log 2>&1); then
+  ok "compile (tracked sources)"
 else
-  bad "compileall — see /tmp/pf_compile.log"
+  bad "compile — see /tmp/pf_compile.log"; head -4 /tmp/pf_compile.log | sed 's/^/        /'
 fi
 
 echo "=== 2. reachability ==="
@@ -55,14 +61,35 @@ else
 fi
 
 echo "=== 3. code actually synced (not merely committed) ==="
-# The failure mode this catches: fix committed locally, sbatch submitted
-# remotely, remote still running the old file.
+# Checks EVERY tracked source file, not a recent-commits window.
+#
+# The previous version compared `git diff HEAD~3`, which silently excluded
+# anything older. src/training/trainer.py had changed 6 commits earlier, was
+# committed alongside scripts/03_train.py but never rsynced, and the window
+# could not see it. Three per-crop TFT jobs then trained for a full hour each
+# and died on the last line:
+#     TypeError: Trainer.save_metadata() got an unexpected keyword argument 'name'
+# Three GPU-hours lost to a guard with a hole in it.
+# macOS ships bash 3.2, which has no mapfile.
+_tracked=""
+while IFS= read -r _f; do _tracked="$_tracked$_f"$'\n'; done < <(cd "$LROOT" && git ls-files \
+  'src/**/*.py' 'scripts/*.py' 'scripts/*.sh' 'dashboard/**/*.py' \
+  'dashboard/*.py' 'configs/**/*.yaml' 'configs/*.yaml' 'tests/*.py' 2>/dev/null)
+_stale=0
+_count=0
+_remote_sums=$(ssh -T "$REMOTE" "cd $RROOT 2>/dev/null && \
+  find src scripts dashboard configs tests -type f \( -name '*.py' -o -name '*.sh' -o -name '*.yaml' \) \
+  -exec sha256sum {} + 2>/dev/null")
 while IFS= read -r rel; do
+  [ -n "$rel" ] || continue
   [ -f "$LROOT/$rel" ] || continue
+  _count=$((_count+1))
   lsum=$(shasum -a 256 "$LROOT/$rel" | cut -d' ' -f1)
-  rsum=$(ssh -T "$REMOTE" "sha256sum $RROOT/$rel 2>/dev/null | cut -d' ' -f1")
-  if [ "$lsum" = "$rsum" ]; then ok "synced $rel"; else bad "STALE ON REMOTE: $rel"; fi
-done < <(cd "$LROOT" && git diff --name-only HEAD~3 2>/dev/null | grep -E '^(src|scripts|dashboard|configs)/.*\.(py|sh|yaml)$' | head -20)
+  rsum=$(printf '%s\n' "$_remote_sums" | awk -v f="$rel" '$2==f || $2=="./"f {print $1; exit}')
+  if [ -z "$rsum" ]; then bad "MISSING ON REMOTE: $rel"; _stale=$((_stale+1))
+  elif [ "$lsum" != "$rsum" ]; then bad "STALE ON REMOTE: $rel"; _stale=$((_stale+1)); fi
+done <<< "$_tracked"
+[ "$_stale" -eq 0 ] && ok "all $_count tracked source files match the cluster"
 
 echo "=== 4. sbatch directives ==="
 part=$(sed -n 's/^#SBATCH --partition=\([^ ]*\).*/\1/p' "$SBATCH_FILE" | head -1)
