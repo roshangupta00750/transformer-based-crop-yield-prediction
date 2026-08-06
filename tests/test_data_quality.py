@@ -23,6 +23,11 @@ from src.utils import load_data_config
 _REPO = Path(__file__).resolve().parents[1]
 
 
+def yaml_safe_load(text):
+    import yaml
+    return yaml.safe_load(text)
+
+
 def test_unsafe_features_are_excluded() -> None:
     cfg = load_data_config()
     columns = {
@@ -480,3 +485,68 @@ def test_model_configs_do_not_shadow_the_feature_policy():
         assert cfg.get("static_features") is None, (
             f"{name}.yaml overrides static_features and will shadow data.yaml"
         )
+
+
+def test_per_crop_training_does_not_clobber_all_crop_artifacts():
+    """A --crop run must not write to the all-crop checkpoint name.
+
+    --crop only filtered rows; the checkpoint name came from --suffix alone.
+    The dashboard's Train page passed --crop without a matching --suffix, so
+    selecting a crop and pressing Start overwrote
+    results/checkpoints/<model>.pt and <model>_meta.json — the all-crop
+    artifacts every other page reads.
+    """
+    def name_for(model, crop=None, suffix=""):
+        # mirrors scripts/03_train.py
+        if not suffix and crop:
+            suffix = f"_{crop}"
+        return f"{model}{suffix}"
+
+    assert name_for("xgboost") == "xgboost"
+    assert name_for("xgboost", "oats") == "xgboost_oats"
+    # an explicit suffix still wins — the sbatch arrays pass one
+    assert name_for("tft", "rye", "_rye") == "tft_rye"
+    # a crop run and the all-crop run must never collide
+    assert name_for("xgboost", "oats") != name_for("xgboost")
+
+
+def test_split_years_are_never_hardcoded_in_dashboard_control_flow():
+    """A literal {2022, 2023} gate silently deleted a feature.
+
+    18_Geographic.py gated its prediction and residual overlays on
+    `year not in {2022, 2023}` -> st.stop(). When configs/data.yaml moved to
+    test_years [2024, 2025] the sets stopped intersecting and every path to
+    those overlays became unreachable — no error, the feature just vanished.
+
+    Scoped to CONTROL FLOW: a year inside a comparison or a set/list membership
+    test changes behaviour when the split moves. A year inside a string is a
+    prose-staleness problem, which is real but separate.
+    """
+    import ast
+
+    offenders = []
+    for path in sorted((_REPO / "dashboard").rglob("*.py")):
+        if "__pycache__" in str(path):
+            continue
+        try:
+            tree = ast.parse(path.read_text())
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Compare):
+                continue
+            for operand in [node.left, *node.comparators]:
+                literals = []
+                if isinstance(operand, ast.Constant):
+                    literals = [operand.value]
+                elif isinstance(operand, (ast.Set, ast.List, ast.Tuple)):
+                    literals = [e.value for e in operand.elts
+                                if isinstance(e, ast.Constant)]
+                for v in literals:
+                    if isinstance(v, int) and 2000 <= v <= 2100:
+                        offenders.append(
+                            f"{path.relative_to(_REPO)}:{node.lineno}: "
+                            f"year {v} in a comparison")
+    assert not offenders, (
+        "dashboard branches on a hardcoded year; read the split from "
+        "configs/data.yaml instead:\n  " + "\n  ".join(offenders))

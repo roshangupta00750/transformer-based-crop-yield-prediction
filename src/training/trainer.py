@@ -66,10 +66,17 @@ class Trainer:
             config=self.model.config,
         )
 
-    def save_metadata(self, result: TrainResult, out_dir: str | Path) -> Path:
+    def save_metadata(self, result: TrainResult, out_dir: str | Path,
+                      name: str | None = None) -> Path:
+        """Write run metadata. ``name`` should match the checkpoint stem.
+
+        Keyed on model name alone, a ten-task per-crop array had all ten tasks
+        overwrite one <model>_meta.json, leaving metadata for whichever task
+        finished last and losing the other nine.
+        """
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
-        path = out_dir / f"{result.model_name}_meta.json"
+        path = out_dir / f"{name or result.model_name}_meta.json"
         with open(path, "w") as f:
             json.dump(asdict(result), f, indent=2, default=str)
         return path

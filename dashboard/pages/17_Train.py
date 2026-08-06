@@ -105,8 +105,13 @@ with right:
 # Launch
 # --------------------------------------------------------------------------- #
 if start:
-    extra = ["--no-anomaly", "--suffix", "_abs"] if no_anomaly else []
     real_crop = None if crop == "(all)" else crop
+    # Compose the suffix so a per-crop run never collides with the all-crop
+    # artefacts, and so the absolute-yield track stays distinct from both.
+    suffix = (f"_{real_crop}" if real_crop else "") + ("_abs" if no_anomaly else "")
+    extra = (["--no-anomaly"] if no_anomaly else [])
+    if suffix:
+        extra += ["--suffix", suffix]
     pid, log, location = launch_training(model, real_crop, extra,
                                          force_local=force_local)
     st.session_state["running_pid"] = pid

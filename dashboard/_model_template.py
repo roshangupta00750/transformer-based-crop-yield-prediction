@@ -501,7 +501,9 @@ def render_model_page(model: str, narrative_intro: str | None = None,
     st.plotly_chart(fig, width="stretch")
 
     # Predictions
-    divider("Predictions vs. truth (2022–2023 test set)")
+    _ty = ", ".join(str(y) for y in
+                    load_data_config()["splits"]["temporal"]["test_years"])
+    divider(f"Predictions vs. truth ({_ty} test set)")
     available_crops = sorted(load_unified()["crop"].unique().tolist()) \
         if not load_unified().empty else ["winter_wheat", "winter_rapeseed"]
     default_idx = available_crops.index("winter_wheat") if "winter_wheat" in available_crops else 0

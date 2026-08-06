@@ -80,10 +80,16 @@ if overlay == "Actual yield":
     values = _yield_year(crop, year)
     label = f"Actual yield (dt/ha), {crop}, {year}"
 else:
-    # Need predictions for the requested year. Our test set covers 2022/2023.
-    if year not in {2022, 2023}:
-        st.warning("Predictions are only computed on the 2022–2023 test split. "
-                   "Pick one of those years for prediction / residual overlays.")
+    # Read the test split from config. This was hardcoded to {2022, 2023};
+    # when configs/data.yaml moved to [2024, 2025] the two sets stopped
+    # intersecting, so every path to the prediction and residual overlays hit
+    # st.stop() and the feature became unreachable.
+    from src.utils import load_data_config
+    _test_years = set(load_data_config()["splits"]["temporal"]["test_years"])
+    if year not in _test_years:
+        _yrs = ", ".join(str(y) for y in sorted(_test_years))
+        st.warning(f"Predictions are only computed on the {_yrs} test split. "
+                   f"Pick one of those years for prediction / residual overlays.")
         st.stop()
     preds, err = _predict_test_set(model, crop)
     if err:

@@ -158,12 +158,24 @@ def main() -> None:
     )
     result = trainer.fit(train_loader, val_loader)
 
+    # A per-crop run MUST NOT write to the all-crop artefact names. --crop
+    # only filtered rows; naming came from --suffix alone, so any caller that
+    # passed --crop without also passing a matching --suffix silently
+    # overwrote results/checkpoints/<model>.pt and <model>_meta.json — the
+    # all-crop artefacts every dashboard page reads. The dashboard's Train
+    # page did exactly that. Deriving the suffix here means no caller can
+    # repeat it; an explicit --suffix still wins, which is what the sbatch
+    # arrays pass.
+    suffix = args.suffix
+    if not suffix and args.crop:
+        suffix = f"_{args.crop}"
+    name = f"{args.model}{suffix}"
+
     out_dir = PROJECT_ROOT / exp_cfg["log"]["metrics_dir"]
-    trainer.save_metadata(result, out_dir)
+    trainer.save_metadata(result, out_dir, name=name)
 
     ckpt_dir = PROJECT_ROOT / exp_cfg["log"]["checkpoints_dir"]
     ckpt_dir.mkdir(parents=True, exist_ok=True)
-    name = f"{args.model}{args.suffix}"
     try:
         model.save(ckpt_dir / f"{name}.pt")
     except NotImplementedError:
