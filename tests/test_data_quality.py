@@ -409,15 +409,19 @@ def test_crop_identity_is_an_explicit_feature():
     assert (single["crop_is_sugar_beet"] == 0).all()
 
 
-def test_every_model_actually_consumes_static_features():
-    """DLinear, PatchTST and iTransformer silently discarded all statics.
+def test_static_head_is_opt_in_and_functional_when_enabled():
+    """Statics are OFF by default for DLinear/PatchTST/iTransformer.
 
-    They built their input as cat([x_past, x_future]) and never referenced
-    batch["x_static"], so soil, terrain, landkreis_id and the crop one-hot
-    indicators reached nothing. The symptom was a retrain in which four
-    models' per-crop R² was bit-identical to the previous run after ten new
-    features were added — adding inputs to a model that reads no statics
-    cannot change its output.
+    The target is an anomaly — yield minus that (district, crop)'s own
+    training mean — so every static feature is constant across the years of a
+    series and cannot explain year-to-year deviation. Added at the head it is
+    a per-series constant, i.e. pure variance. Measured cost when wired in:
+    dlinear -0.174, itransformer -0.046, tft -0.089 mean R²; XGBoost was
+    unchanged because tree splits capture the interactions an additive head
+    cannot.
+
+    The pathway is kept, gated on use_static_head, so the experiment is
+    repeatable and multiplicative gating can be tried later.
     """
     import torch
     import yaml
@@ -437,20 +441,29 @@ def test_every_model_actually_consumes_static_features():
     for name, cls in [("dlinear", DLinearModel),
                       ("patchtst", PatchTSTModel),
                       ("itransformer", ITransformerModel)]:
-        cfg = yaml.safe_load(
+        base = yaml.safe_load(
             (_REPO / "configs" / "models" / f"{name}.yaml").read_text())
+
+        # default: statics excluded
         torch.manual_seed(0)
-        m = cls(cfg)
-        m.fit(loader(), None, max_epochs=1, patience=1, device="cpu")
-        assert getattr(m.net, "n_static", 0) == 5, f"{name} ignored n_static"
+        off = cls(dict(base))
+        off.fit(loader(), None, max_epochs=1, patience=1, device="cpu")
+        assert getattr(off.net, "n_static", 0) == 0, (
+            f"{name}: static head must be off by default")
+
+        # opt in: statics reach the output
+        torch.manual_seed(0)
+        on = cls({**base, "use_static_head": True})
+        on.fit(loader(), None, max_epochs=1, patience=1, device="cpu")
+        assert getattr(on.net, "n_static", 0) == 5
 
         b = next(iter(loader(8)))
         x = torch.cat([b["x_past"], b["x_future"]], dim=-1)
         with torch.no_grad():
-            with_static = m.net(x, b["mask"], b["x_static"])
-            without = m.net(x, b["mask"], torch.zeros_like(b["x_static"]))
-        assert float((with_static - without).abs().mean()) > 1e-8, (
-            f"{name}: zeroing the static features did not change the output")
+            a = on.net(x, b["mask"], b["x_static"])
+            z = on.net(x, b["mask"], torch.zeros_like(b["x_static"]))
+        assert float((a - z).abs().mean()) > 1e-8, (
+            f"{name}: use_static_head=True but statics do not affect output")
 
 
 def test_model_configs_do_not_shadow_the_feature_policy():

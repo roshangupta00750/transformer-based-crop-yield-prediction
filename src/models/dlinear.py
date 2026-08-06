@@ -60,6 +60,24 @@ class _DLinearNet(nn.Module):
         # These were previously DROPPED ENTIRELY — the model built its input
         # as cat([x_past, x_future]) and never referenced x_static, so soil,
         # terrain, landkreis_id and the crop one-hots reached nothing.
+        # Static covariates are OFF by default for this architecture.
+        #
+        # The target is an anomaly: yield minus that (district, crop)'s own
+        # training mean. Every static feature — soil, terrain, landkreis_id,
+        # crop one-hots — is CONSTANT for a given (district, crop) across all
+        # years, so it cannot explain year-to-year deviation. Injected
+        # additively at the head it contributes a per-series constant, which
+        # against an anomaly target is pure variance.
+        #
+        # Measured, wiring statics in cost: dlinear -0.174, itransformer
+        # -0.046, lstm -0.028, tft -0.089 mean R². XGBoost was unchanged to
+        # 3 decimals because tree splits capture the interactions that an
+        # additive head cannot.
+        #
+        # Statics could still help by MODULATING the time-varying pathway
+        # (sandy soil making a dry year worse). That needs multiplicative
+        # gating, not addition — left as future work. Set use_static_head:
+        # true in the model config to re-enable the additive path.
         self.n_static = n_static
         self.linear_static = nn.Linear(n_static, 1) if n_static else None
 
@@ -104,7 +122,8 @@ class DLinearModel(BaseModel):
         import time
         self.device = device
         first = next(iter(train_loader))
-        n_static = first["x_static"].shape[-1]
+        n_static = (first["x_static"].shape[-1]
+                     if self.config.get("use_static_head", False) else 0)
         T = first["x_past"].shape[1]
         # DLinear processes past + future stacked along channel axis.
         n_channels = first["x_past"].shape[-1] + first["x_future"].shape[-1]
