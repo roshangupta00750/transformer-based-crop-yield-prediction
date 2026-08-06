@@ -35,7 +35,6 @@ def _page(path: Path, title: str, *, default: bool = False) -> "st.navigation.Pa
 SECTIONS = {
     "Overview": [
         _page(DASH / "Home.py", "Home", default=True),
-        _page(PAGES / "01_Problem.py", "Why This Benchmark"),
         _page(PAGES / "02_Data.py", "Data"),
     ],
     "Models": [

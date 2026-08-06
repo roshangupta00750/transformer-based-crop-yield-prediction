@@ -67,30 +67,6 @@ else:
 _rho_str = f"{mean_rho:.2f}" if mean_rho == mean_rho else "—"
 _top3_str = f"all {n}" if hit3 == n else f"{hit3} of {n}"
 
-st.markdown(
-    "### TL;DR\n\n"
-    f"A first-principles crop-model taxonomy correctly picks the winning "
-    f"model on {hit1} of {n} crops (top-3 on {_top3_str}) with mean "
-    f"Spearman ρ = {_rho_str} "
-    "— the benchmark is a hypothesis test, not a leaderboard."
-)
-
-with st.expander("More details", expanded=False):
-    st.caption(
-        "The paper's headline contribution — a first-principles taxonomy "
-        "that predicts which architecture wins which crop from crop biology "
-        f"and model inductive bias, hitting top-1 on {hit1} of {n} crops and "
-        f"top-3 on {_top3_str}."
-    )
-    st.info(
-        "**How this differs from typical ML benchmark studies.** Most "
-        "benchmarks report *which model won each crop* — descriptive. This "
-        "taxonomy makes a *testable prediction from first principles* "
-        "(crop phenology × model inductive bias) and then validates it "
-        "against the benchmark. That reframes the empirical study from "
-        "*engineering exercise* to *taxonomic hypothesis test.*"
-    )
-
 # --------------------------------------------------------------------------- #
 # Headline KPIs
 # --------------------------------------------------------------------------- #

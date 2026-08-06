@@ -51,45 +51,6 @@ else:
     _min_val = _max_val = float("nan")
     _per_model_str = "counterfactual CSV missing"
 
-st.markdown(
-    "### TL;DR\n\n"
-    f"Under SSP5-8.5 warming ({_tas5:+.2f} °C growing-season tasmax delta), "
-    f"the 6 models diverge from {_min_val:+.2f}% ({_min_model}) "
-    f"to {_max_val:+.2f}% ({_max_model}) predicted yield change — "
-    "cross-model disagreement itself is a free out-of-distribution "
-    "uncertainty signal."
-)
-
-with st.expander("More details — CMIP6 ensemble caveat & interpretation",
-                 expanded=False):
-    st.caption(
-        "Do models agree under CMIP6 SSP2-4.5 and SSP5-8.5 warming? — "
-        "a three-model ensemble stress test where cross-model "
-        "disagreement becomes a free OOD-uncertainty signal."
-    )
-    st.info(
-        "**Three-model CMIP6 ensemble caveat.** We use a 3-model ensemble "
-        "(EC-Earth3-CC + MPI-ESM1-2-LR + MRI-ESM2-0, all r1i1p1f1). "
-        f"Ensemble-mean growing-season tasmax delta under SSP5-8.5 is "
-        f"**{_tas5:+.2f} °C** (SSP2-4.5: {_tas2:+.2f} °C). "
-        "Still below the IPCC AR6 multi-model multi-realization mean "
-        "(~+1.5-2 °C by 2050); multi-realization analysis is left for "
-        "future work. Note that MRI-ESM2-0 is the only member showing the "
-        "expected SSP5-8.5 > SSP2-4.5 warming ordering for Germany in "
-        "this window — the ensemble mean is dragged flatter by internal "
-        "variability in the other two single-realization runs."
-    )
-    st.info(
-        "**Cross-model disagreement itself IS the finding.** Per-model "
-        f"predicted yield change under SSP5-8.5: {_per_model_str}. "
-        f"Spread from {_min_val:+.2f}% ({_min_model}) to "
-        f"{_max_val:+.2f}% ({_max_model}) is a **free "
-        "out-of-distribution uncertainty signal** — no explicit Bayesian "
-        "machinery required. Trees and attention models with explicit "
-        "variable selection tend to damp small input perturbations; "
-        "recurrent architectures preserve them more."
-    )
-
 summary_path = METRICS_DIR / "counterfactual_daily_summary.csv"
 district_path = METRICS_DIR / "counterfactual_daily_district.csv"
 if not summary_path.exists():
@@ -153,11 +114,6 @@ st.plotly_chart(fig, width="stretch")
 # --------------------------------------------------------------------------- #
 divider("Per-model response — cross-model divergence is itself the signal")
 
-st.caption(
-    "Under out-of-distribution weather (climate change) individual models "
-    "diverge. Cross-model disagreement is a free uncertainty estimate: "
-    "high spread = low confidence in the projection."
-)
 
 model_pivot = summary.pivot_table(
     index="model", columns="scenario", values="delta_pct", aggfunc="mean"
@@ -202,12 +158,6 @@ st.dataframe(
                        "Std across models": "{:.2f}",
                        "Min": "{:+.2f}", "Max": "{:+.2f}"}),
     hide_index=True, width="stretch",
-)
-st.caption(
-    "Standard deviation across models per crop. High std = models disagree "
-    "on how climate change affects this crop = high projected uncertainty. "
-    "In the paper: this itself becomes a novel finding — ensemble "
-    "disagreement calibrates OOD confidence for free."
 )
 
 # --------------------------------------------------------------------------- #

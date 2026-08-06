@@ -31,31 +31,6 @@ page_header("Supplementary — multi-criteria model recommendation",
             "+ w_interp * interpretability + w_compute * compute cost. "
             "Drag the sliders to see how the winner shifts.")
 
-st.markdown(
-    "### TL;DR\n\n"
-    "If accuracy alone doesn't drive the call, the per-crop winner shifts "
-    "once climate robustness, interpretability, or compute cost carry real "
-    "weight — drag the sliders to see it."
-)
-
-with st.expander("More details — supplementary caveat", expanded=False):
-    st.caption(
-        "Chapter 7 supplementary — we also explored what happens when "
-        "criteria other than raw R² carry weight; the paper's headline "
-        "remains accuracy-only taxonomy validation."
-    )
-    st.info(
-        "**Not the paper's headline claim.** The composite ranking is a "
-        "supplementary exploration of how non-accuracy criteria (climate "
-        "robustness under CMIP6 SSP2-4.5/5-8.5, architecture "
-        "interpretability, training compute cost) would shift the "
-        "per-crop model recommendation if they carried real weight. The "
-        "paper's headline remains per-crop accuracy validated against "
-        "the a priori taxonomy (see page 13). Use this exhibit as a "
-        "sensitivity check, not as a competing verdict."
-    )
-
-
 # --------------------------------------------------------------------------- #
 # Data
 # --------------------------------------------------------------------------- #

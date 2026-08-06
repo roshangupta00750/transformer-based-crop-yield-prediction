@@ -42,13 +42,6 @@ st.markdown(
 )
 
 # One-shot info banner about the grouped-sidebar entrypoint.
-st.info(
-    "For the grouped sidebar (7 sections), launch with "
-    "`streamlit run dashboard/nav.py`. Running "
-    "`streamlit run dashboard/Home.py` directly still works but shows a "
-    "flat 19-entry sidebar.",
-    icon=None,
-)
 
 if not results_policy_is_current():
     st.error(

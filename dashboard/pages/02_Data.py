@@ -18,13 +18,6 @@ st.set_page_config(page_title="Data — Crop Yield Benchmark",
 page_header("Data sources & previews",
             "Origin, license, and a live row preview for each modality.")
 
-st.markdown(
-    "### TL;DR\n\n"
-    "One unified dataset — 10 crops × 401 NUTS-3 districts × 23 years "
-    "(2003-2025) — assembled from four fully-provenanced open sources "
-    "(weather, satellite, soil, yield)."
-)
-
 # --------------------------------------------------------------------------- #
 # Hero KPI row — the four numbers a reader needs at a glance
 # --------------------------------------------------------------------------- #

@@ -351,16 +351,11 @@ def _predict_test_set(model: str, crop: str,
     }), None
 
 
-def render_model_page(model: str, narrative_intro: str | None = None,
-                      tldr: str | None = None) -> None:
+def render_model_page(model: str) -> None:
     info = MODEL_INFO.get(model, {})
     st.set_page_config(page_title=f"{model.upper()} — Crop Yield",
                        layout="wide")
     page_header(model.upper(), info.get("ref", ""))
-    if tldr:
-        st.markdown(f"### TL;DR\n\n{tldr}")
-    if narrative_intro:
-        st.caption(f"_{narrative_intro}_")
 
     # Config + meta
     cfg = _read_model_config(model)

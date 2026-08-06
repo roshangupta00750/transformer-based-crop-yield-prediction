@@ -26,21 +26,6 @@ page_header("Head-to-head Leaderboard",
             "Best R² per model, per-crop matrix with taxonomy overlay, "
             "family compatibility heatmap, and single-crop drilldown.")
 
-st.markdown(
-    "### TL;DR\n\n"
-    "Across six architectures and ten crops, the taxonomy's PRIMARY pick "
-    "aligns with the empirical top-1 winner on most crops on the 2024-2025 "
-    "held-out test split."
-)
-
-with st.expander("More details", expanded=False):
-    st.caption(
-        "Six architectures across ten crops — best-per-model table, "
-        "per-crop-by-model matrix with taxonomy [P]/[A] overlay, "
-        "crop-family x model-family compatibility heatmap, and a "
-        "single-crop drilldown; the canonical Chapter 4 landing."
-    )
-
 metrics = load_all_metrics()
 tax = load_taxonomy()
 
