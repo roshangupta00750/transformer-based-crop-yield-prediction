@@ -47,15 +47,12 @@ features:
     - precipitation_height_missing
     - humidity_missing
     - ndvi_observed
-    - evi_observed
     - lai_observed
     - ndwi_observed
     - ndvi_stale
-    - evi_stale
     - lai_stale
     - ndwi_stale
     - ndvi_age_days
-    - evi_age_days
     - lai_age_days
     - ndwi_age_days
   static:
@@ -104,6 +101,16 @@ features:
     - auc_growing
     # COP-DEM coastline/raster artefacts produced impossible district minima.
     - elevation_min
+    # NDVI and EVI come from the same MODIS product on the same acquisition
+    # dates, so their observation/age/staleness indicators are necessarily
+    # identical. Verified byte-identical to the ndvi_* versions across all
+    # 16,562,352 rows (0 mismatches each). Three of twenty past-observed
+    # channels carried zero incremental information, and perfectly collinear
+    # inputs actively hurt the linear model. lai_* is NOT a duplicate
+    # (1,046,335 mismatches) and is retained.
+    - evi_observed
+    - evi_stale
+    - evi_age_days
 
 # Reject crop sequences that contain less than this fraction of their expected
 # configured growing-season days. Applied before train/val/test splitting and

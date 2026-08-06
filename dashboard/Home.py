@@ -1,4 +1,10 @@
-"""Home — minimal insight-first landing for the crop-yield benchmark.
+"""Home — status board for the crop-yield benchmark.
+
+Answers four questions from live artefacts only: what data is on disk, what
+is trained, how good it scores, and whether the scores still describe the
+checkpoints they claim to describe. Every number is read at render time —
+nothing on this page is hardcoded, because the benchmark is retrained often
+and any literal would go stale silently.
 
 Streamlit auto-discovers this file when invoked as ``streamlit run
 dashboard/Home.py``. For the grouped sidebar (7 collapsible sections
@@ -13,15 +19,15 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
+from datetime import datetime
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from utils import (divider, kpi, load_all_metrics, load_multicrop_summary,
-                   load_taxonomy_validation, load_unified, METRICS_DIR,
+from utils import (CHECKPOINTS_DIR, METRICS_DIR, MODELS, PROCESSED, divider,
+                   kpi, load_multicrop_summary, load_taxonomy,
                    results_policy_is_current)
 
 st.set_page_config(
@@ -33,15 +39,134 @@ st.set_page_config(
 DASHBOARD_DIR = Path(__file__).resolve().parent
 PAGES = DASHBOARD_DIR / "pages"
 
+CKPT_EXTS = (".pt", ".ubj")
+SUMMARY_PATH = METRICS_DIR / "multicrop_summary.csv"
+TAXONOMY_VALIDATION_PATH = METRICS_DIR / "taxonomy_validation.csv"
+RESULTS_POLICY_PATH = METRICS_DIR / "feature_policy.json"
+
+# Diverging ramp for R², which has a meaningful zero: 0 = no better than
+# predicting the crop mean, negative = worse than that. Two hues with a
+# neutral midpoint pinned to zero, so sign reads without the colourbar.
+# Both ends stop short of the darkest ColorBrewer steps so that CELL_INK
+# clears 4.5:1 on every cell in either Streamlit theme — the fills are
+# opaque, so contrast is against the fill, not the page background.
+R2_SCALE = [
+    [0.00, "#d6604d"], [0.25, "#f4a582"],
+    [0.50, "#f7f7f7"],
+    [0.75, "#92c5de"], [1.00, "#4393c3"],
+]
+# Error metrics are one-directional magnitudes: single hue, light to dark,
+# warm because larger always means worse.
+ERROR_SCALE = [
+    [0.00, "#fff5eb"], [0.33, "#fdd0a2"], [0.66, "#fdae6b"],
+    [1.00, "#f16913"],
+]
+CELL_INK = "#1a1a1a"
+METRIC_CHOICES = {
+    "R² (higher is better)": "r2",
+    "RMSE dt/ha (lower is better)": "rmse",
+    "MAE dt/ha (lower is better)": "mae",
+}
+
+
+def _mtime(path: Path) -> float | None:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
+def _stamp(ts: float | None) -> str:
+    if ts is None:
+        return "missing"
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+
+
 # --------------------------------------------------------------------------- #
-# Header
+# Cached readers — each returns only small aggregates so the 16 M-row parquet
+# is never held in session memory.
+# --------------------------------------------------------------------------- #
+@st.cache_data(ttl=300, show_spinner="Reading dataset…")
+def dataset_facts() -> dict:
+    """Shape of `data/processed/dataset.parquet`, read column-subset only."""
+    if not PROCESSED.exists():
+        return {}
+    import pyarrow.compute as pc
+    import pyarrow.parquet as pq
+
+    meta = pq.ParquetFile(PROCESSED).metadata
+    table = pq.read_table(
+        PROCESSED, columns=["crop", "landkreis", "year", "yield_dt_per_ha"]
+    )
+    panel = table.group_by(["crop", "landkreis", "year"]).aggregate(
+        [("yield_dt_per_ha", "count")]
+    )
+    per_crop = (
+        panel.group_by("crop")
+        .aggregate([("landkreis", "count_distinct"),
+                    ("year", "min"), ("year", "max"), ("year", "count")])
+        .to_pandas()
+        .rename(columns={"crop": "Crop",
+                         "landkreis_count_distinct": "Districts",
+                         "year_min": "First year",
+                         "year_max": "Last year",
+                         "year_count": "Crop-district-years"})
+        .sort_values("Crop-district-years", ascending=False)
+        .reset_index(drop=True)
+    )
+    return {
+        "daily_rows": meta.num_rows,
+        "columns": meta.num_columns,
+        "crops": len(pc.unique(table["crop"])),
+        "districts": len(pc.unique(table["landkreis"])),
+        "year_min": pc.min(table["year"]).as_py(),
+        "year_max": pc.max(table["year"]).as_py(),
+        "panel_rows": panel.num_rows,
+        "per_crop": per_crop,
+        "mtime": _mtime(PROCESSED),
+    }
+
+
+@st.cache_data(ttl=30)
+def checkpoint_inventory(crops: tuple[str, ...]) -> pd.DataFrame:
+    """One row per model family: which checkpoints exist and when written.
+
+    Matches exact filenames only — `<model>.pt|.ubj` for the pooled run and
+    `<model>_<crop>.pt|.ubj` for per-crop runs — so experiment variants such
+    as `xgboost_abs` or `tft.55m` are not miscounted as production artefacts.
+    """
+    rows = []
+    for model in MODELS:
+        pooled = next(
+            (CHECKPOINTS_DIR / f"{model}{e}" for e in CKPT_EXTS
+             if (CHECKPOINTS_DIR / f"{model}{e}").exists()), None
+        )
+        per_crop = []
+        for crop in crops:
+            for e in CKPT_EXTS:
+                fp = CHECKPOINTS_DIR / f"{model}_{crop}{e}"
+                if fp.exists():
+                    per_crop.append(fp)
+                    break
+        files = ([pooled] if pooled is not None else []) + per_crop
+        stamps = [t for t in (_mtime(f) for f in files) if t is not None]
+        rows.append({
+            "Model": model,
+            "Pooled": pooled is not None,
+            "Per-crop": len(per_crop),
+            "_newest": max(stamps) if stamps else None,
+        })
+    return pd.DataFrame(rows)
+
+
+# --------------------------------------------------------------------------- #
+# Header + policy gate
 # --------------------------------------------------------------------------- #
 st.markdown(
     "# Transformer-based Crop Yield Prediction\n"
-    "**Praktikum — Julius-Maximilians-Universität Würzburg · Institut für Informatik**"
+    "**Praktikum — Julius-Maximilians-Universität Würzburg · "
+    "Institut für Informatik**"
 )
-
-# One-shot info banner about the grouped-sidebar entrypoint.
 
 if not results_policy_is_current():
     st.error(
@@ -52,221 +177,285 @@ if not results_policy_is_current():
     )
     st.stop()
 
-st.subheader(
-    "A first-principles crop-model taxonomy picks the winning architecture "
-    "on most German districts."
-)
+bar_left, bar_right = st.columns([4, 1])
+with bar_left:
+    st.caption(f"Read from disk at {datetime.now():%Y-%m-%d %H:%M:%S}. "
+               "Cached readers hold values for up to 5 minutes.")
+with bar_right:
+    if st.button("Reload from disk", width="stretch"):
+        st.cache_data.clear()
+        st.rerun()
 
 # --------------------------------------------------------------------------- #
-# Hero KPI row
+# Data on disk
 # --------------------------------------------------------------------------- #
-tax_val = load_taxonomy_validation()
-metrics_df = load_all_metrics()
-unified = load_unified()
+divider("Data")
 
-# Mean Spearman rho from the per-crop rank file (validation.csv has no rho column).
-rank_path = METRICS_DIR / "taxonomy_rank_correlation.csv"
-mean_rho: float | None = None
-if rank_path.exists():
-    try:
-        from scipy.stats import spearmanr
-        ranks = pd.read_csv(rank_path)
-        rhos = ranks.groupby("crop").apply(
-            lambda g: spearmanr(g["predicted_rank"], g["observed_rank"]).statistic
+facts = dataset_facts()
+if not facts:
+    st.warning(
+        f"`{PROCESSED}` not found. Build it with "
+        "`python scripts/02_build_dataset.py` before training or scoring."
+    )
+else:
+    d1, d2, d3, d4, d5 = st.columns(5)
+    with d1:
+        kpi("Crop-district-years", f"{facts['panel_rows']:,}")
+    with d2:
+        kpi("Daily rows", f"{facts['daily_rows']:,}")
+    with d3:
+        kpi("Crops", f"{facts['crops']}")
+    with d4:
+        kpi("NUTS-3 districts", f"{facts['districts']}")
+    with d5:
+        kpi("Years", f"{facts['year_min']}-{facts['year_max']}")
+
+    with st.expander("Coverage per crop"):
+        st.dataframe(
+            facts["per_crop"],
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "Crop-district-years": st.column_config.NumberColumn(
+                    format="%d"),
+                "First year": st.column_config.NumberColumn(format="%d"),
+                "Last year": st.column_config.NumberColumn(format="%d"),
+            },
         )
-        mean_rho = float(rhos.mean())
-    except Exception:
-        mean_rho = None
-
-hit1 = int(tax_val["hit_at_1"].sum()) if not tax_val.empty else 0
-n_crops_val = int(tax_val["crop"].nunique()) if not tax_val.empty else 0
-n_crops_all = (
-    int(unified["crop"].nunique()) if not unified.empty else n_crops_val or 10
-)
-n_models = (
-    int(metrics_df["model"].nunique()) if not metrics_df.empty else 6
-)
-n_districts = (
-    int(unified["landkreis"].nunique()) if not unified.empty else 401
-)
-
-c1, c2, c3, c4, c5 = st.columns(5)
-with c1:
-    kpi("Top-1 taxonomy hits",
-        f"{hit1}/{n_crops_val}" if n_crops_val else "—")
-with c2:
-    kpi("Mean Spearman rho",
-        f"{mean_rho:+.2f}" if mean_rho is not None else "—")
-with c3:
-    kpi("Crops benchmarked", f"{n_crops_all}")
-with c4:
-    kpi("Model architectures", f"{n_models}")
-with c5:
-    kpi("NUTS-3 districts", f"{n_districts}")
+    st.caption(f"{PROCESSED.name} · {facts['columns']} columns · "
+               f"written {_stamp(facts['mtime'])}")
 
 # --------------------------------------------------------------------------- #
-# Hero chart — R² heatmap with taxonomy predicted-primary cell outlined
+# What is trained
 # --------------------------------------------------------------------------- #
-divider("Test-set R² by crop and model")
+divider("Trained models")
 
 multicrop = load_multicrop_summary()
+crop_list = tuple(sorted(facts["per_crop"]["Crop"])) if facts else (
+    tuple(sorted(multicrop["crop"].unique())) if not multicrop.empty else ()
+)
+inventory = checkpoint_inventory(crop_list)
+summary_mtime = _mtime(SUMMARY_PATH)
+
 if multicrop.empty:
     st.warning(
-        "`results/metrics/multicrop_summary.csv` not found. Run "
-        "`python scripts/05b_eval_multicrop.py` to generate it."
+        f"`{SUMMARY_PATH}` not found. Run "
+        "`python scripts/05b_eval_multicrop.py` to score the checkpoints."
     )
+    scored = pd.DataFrame(columns=["Model", "Crops scored", "Mean R²",
+                                   "Best crop", "Best R²"])
 else:
-    pivot = (
-        multicrop.pivot_table(index="crop", columns="model",
-                              values="r2", aggfunc="max")
-    )
-    # Order models canonically when present.
-    canonical = ["xgboost", "dlinear", "lstm", "patchtst", "itransformer", "tft"]
-    cols_ordered = [m for m in canonical if m in pivot.columns] + \
-                   [m for m in pivot.columns if m not in canonical]
-    pivot = pivot[cols_ordered]
+    best_idx = multicrop.groupby("model")["r2"].idxmax()
+    best = multicrop.loc[best_idx].set_index("model")
+    scored = pd.DataFrame({
+        "Model": multicrop.groupby("model")["crop"].nunique().index,
+        "Crops scored": multicrop.groupby("model")["crop"].nunique().values,
+        "Mean R²": multicrop.groupby("model")["r2"].mean().values,
+    })
+    scored["Best crop"] = scored["Model"].map(best["crop"])
+    scored["Best R²"] = scored["Model"].map(best["r2"])
 
-    fig = go.Figure(
-        data=go.Heatmap(
-            z=pivot.values,
-            x=list(pivot.columns),
-            y=list(pivot.index),
-            colorscale="Viridis",
-            colorbar=dict(title="R²"),
-            hovertemplate="Crop: %{y}<br>Model: %{x}<br>R²: %{z:.3f}<extra></extra>",
-        )
-    )
-
-    # Outline the taxonomy's predicted-primary cell per crop.
-    if not tax_val.empty:
-        crop_order = list(pivot.index)
-        model_order = list(pivot.columns)
-        shapes = []
-        for _, row in tax_val.iterrows():
-            crop = row["crop"]
-            pred = row.get("predicted_primary")
-            if crop not in crop_order or pred not in model_order:
-                continue
-            yi = crop_order.index(crop)
-            xi = model_order.index(pred)
-            shapes.append(dict(
-                type="rect",
-                x0=xi - 0.5, x1=xi + 0.5,
-                y0=yi - 0.5, y1=yi + 0.5,
-                line=dict(color="#ff3860", width=3),
-                fillcolor="rgba(0,0,0,0)",
-                layer="above",
-            ))
-        fig.update_layout(shapes=shapes)
-
-    fig.update_layout(
-        height=460, margin=dict(l=10, r=10, t=30, b=10),
-        xaxis_title="Model", yaxis_title="Crop",
-    )
-    st.plotly_chart(fig, width="stretch")
-    st.caption(
-        "Darker = higher R². Red outlines mark the taxonomy's a-priori "
-        f"predicted primary — the outline lands on the darkest cell in "
-        f"{hit1} of {n_crops_val} rows."
-    )
-
-# --------------------------------------------------------------------------- #
-# Tour tiles
-# --------------------------------------------------------------------------- #
-divider("Take a tour")
-
-# Fresh values for the tour cards below — read straight from the same CSVs
-# their linked pages render, so no card ever drifts from its target page.
-try:
-    _fs6 = pd.read_csv(METRICS_DIR / "fusion_summary_6models.csv")
-    vrf_mean_r2 = float(_fs6[_fs6["method"] == "vrf_simple_avg"]["r2"].mean())
-except Exception:
-    vrf_mean_r2 = float("nan")
-
-try:
-    _cc_daily = pd.read_csv(METRICS_DIR / "counterfactual_daily_summary.csv")
-    _ssp5 = _cc_daily[_cc_daily["scenario"] == "ssp5_8_5"]
-    climate_tas_delta_c = float(_ssp5["tasmax_delta_C"].iloc[0])
-    _per_model = _ssp5.groupby("model")["delta_pct"].mean()
-    climate_pct_min = float(_per_model.min())
-    climate_pct_max = float(_per_model.max())
-except Exception:
-    climate_tas_delta_c = float("nan")
-    climate_pct_min = float("nan")
-    climate_pct_max = float("nan")
-
-_headline_rho = f"{mean_rho:+.2f}" if mean_rho is not None else "—"
-_headline_hits = f"{hit1}/{n_crops_val}" if n_crops_val else "—"
-
-INSIGHT_CARDS = [
-    dict(title="The headline test",
-         big=f"{_headline_hits} top-1  ·  ρ {_headline_rho}",
-         body=(f"Taxonomy-predicted primary wins on {hit1} of {n_crops_val} "
-               f"crops; predicted ranking matches observed at Spearman "
-               f"{_headline_rho}."),
-         page=PAGES / "13_Taxonomy.py", label="Open Taxonomy"),
-    dict(title="Full crop × model leaderboard",
-         big=f"{n_crops_all * n_models} cells scored",
-         body="Per-crop R² for all six architectures with taxonomy "
-              "predicted/actual overlay on the 2024-2025 test split.",
-         page=PAGES / "09_Leaderboard.py", label="Open Leaderboard"),
-    dict(title="Climate stress test",
-         big=f"{climate_tas_delta_c:+.2f} °C SSP5-8.5",
-         body=(f"Under CMIP6 SSP5-8.5 warming ({climate_tas_delta_c:+.2f} °C "
-               f"tasmax), per-model mean yield deltas span "
-               f"{climate_pct_min:+.2f}% to {climate_pct_max:+.2f}% — spread "
-               f"as a free OOD signal."),
-         page=PAGES / "15_Climate.py", label="Open Climate"),
-    dict(title="Fusion when TFT joins",
-         big=f"{vrf_mean_r2:+.2f} mean R²",
-         body=(f"Voting-average fusion (VRF simple-avg, 6 models) reaches "
-               f"{vrf_mean_r2:+.2f} mean R² across crops; non-negativity "
-               f"guardrails keep heterogeneous specialists safe."),
-         page=PAGES / "14_Fusion.py", label="Open Fusion"),
-    dict(title="Literature sanity check",
-         big="Within / above range",
-         body="Best-per-crop R² lands within or above the published EU/German "
-              "literature bands on most of the 10 crops.",
-         page=PAGES / "16_Literature.py", label="Open Literature"),
-    dict(title="Beyond accuracy",
-         big="4 weight sliders",
-         body="Drag climate, interpretability, and compute weights to see how "
-              "the per-crop winner shifts once trade-offs count.",
-         page=PAGES / "19_Recommendation.py", label="Open Recommendation"),
+status = inventory.merge(scored, on="Model", how="outer")
+# A model scored from an artefact that is no longer on disk merges in with
+# no inventory columns; show it as "no checkpoint" rather than as NaN.
+status["Pooled"] = status["Pooled"].fillna(False).astype(bool)
+status["Per-crop"] = status["Per-crop"].fillna(0).astype(int)
+status["Checkpoint written"] = status["_newest"].map(_stamp)
+status["Scores current"] = [
+    bool(summary_mtime is not None and n is not None and summary_mtime >= n)
+    for n in status["_newest"]
 ]
+status = status.sort_values("Mean R²", ascending=False, na_position="last")
 
-# Render as a 3-column grid.
-for row_start in range(0, len(INSIGHT_CARDS), 3):
-    cols = st.columns(3, gap="medium")
-    for card, col in zip(INSIGHT_CARDS[row_start:row_start + 3], cols):
-        with col:
-            with st.container(border=True):
-                st.markdown(f"**{card['title']}**")
-                st.markdown(
-                    f"<div style='font-size:1.55rem;font-weight:600;"
-                    f"margin:0.15rem 0 0.35rem 0;'>{card['big']}</div>",
-                    unsafe_allow_html=True,
-                )
-                st.caption(card["body"])
-                try:
-                    st.page_link(str(card["page"]), label=card["label"])
-                except Exception:
-                    # page_link only works when a page graph is present
-                    # (i.e. via nav.py or the default multi-page discovery).
-                    st.caption(f"→ {card['page'].name}")
-
-# --------------------------------------------------------------------------- #
-# Footer — one line only
-# --------------------------------------------------------------------------- #
-if not unified.empty and "year" in unified.columns:
-    _year_min = int(unified["year"].min())
-    _year_max = int(unified["year"].max())
-    _year_span = f"{_year_min}-{_year_max}"
-else:
-    _year_span = "2003-2025"
-
-st.caption(
-    f"{n_crops_all} German crops · {n_districts} NUTS-3 districts · "
-    f"{_year_span} · {n_models} architectures · one unified dataset. "
-    "Source & full methodology in the sidebar."
+st.dataframe(
+    status[["Model", "Pooled", "Per-crop", "Checkpoint written",
+            "Crops scored", "Mean R²", "Best crop", "Best R²",
+            "Scores current"]],
+    hide_index=True,
+    width="stretch",
+    column_config={
+        "Pooled": st.column_config.CheckboxColumn(
+            help="An all-crop checkpoint <model>.pt or <model>.ubj exists"),
+        "Per-crop": st.column_config.NumberColumn(
+            format="%d",
+            help="Count of <model>_<crop> checkpoints on disk"),
+        "Crops scored": st.column_config.NumberColumn(
+            format="%d",
+            help="Crops this model has a row for in multicrop_summary.csv"),
+        "Mean R²": st.column_config.NumberColumn(
+            format="%.3f",
+            help="Unweighted mean of this model's per-crop test-split R². "
+                 "A row with scores but no checkpoint was scored from an "
+                 "artefact that is no longer on disk."),
+        "Best R²": st.column_config.NumberColumn(format="%.3f"),
+        "Scores current": st.column_config.CheckboxColumn(
+            help="multicrop_summary.csv is at least as new as this model's "
+                 "newest checkpoint"),
+    },
 )
+
+t1, _ = st.columns([1, 4])
+with t1:
+    try:
+        st.page_link(str(PAGES / "17_Train.py"), label="Train a model",
+                     width="stretch")
+    except Exception:
+        st.caption("Train page: pages/17_Train.py")
+
+# --------------------------------------------------------------------------- #
+# Freshness chain
+# --------------------------------------------------------------------------- #
+divider("Artefact freshness")
+
+newest_ckpt = status["_newest"].dropna()
+chain = [
+    ("data/processed/dataset.parquet", facts.get("mtime") if facts else None),
+    ("results/checkpoints (newest)",
+     float(newest_ckpt.max()) if not newest_ckpt.empty else None),
+    ("results/metrics/multicrop_summary.csv", summary_mtime),
+    ("results/metrics/taxonomy_validation.csv",
+     _mtime(TAXONOMY_VALIDATION_PATH)),
+]
+# Each stage must be newer than *everything* upstream of it, not merely than
+# the stage directly above — otherwise one stale stage lowers the bar for the
+# next and the rot stops being visible.
+fresh_rows, stale = [], []
+up_name, up_ts = None, None
+for name, ts in chain:
+    if ts is None:
+        state = "Missing"
+    elif up_ts is not None and ts < up_ts:
+        state = f"Stale — predates {up_name}"
+        stale.append(name)
+    else:
+        state = "Current"
+    fresh_rows.append({"Artefact": name, "Last written": _stamp(ts),
+                       "Status": state})
+    if ts is not None and (up_ts is None or ts > up_ts):
+        up_name, up_ts = name, ts
+
+st.dataframe(pd.DataFrame(fresh_rows), hide_index=True, width="stretch")
+if stale:
+    st.warning(
+        "Rebuild these before quoting anything downstream of them: "
+        + ", ".join(f"`{s}`" for s in stale)
+        + ". Each stage must be newer than every stage above it."
+    )
+st.caption(f"Results feature policy: {RESULTS_POLICY_PATH.name}, written "
+           f"{_stamp(_mtime(RESULTS_POLICY_PATH))}.")
+
+# --------------------------------------------------------------------------- #
+# Scores
+# --------------------------------------------------------------------------- #
+divider("Held-out test scores by crop and model")
+
+if multicrop.empty:
+    st.info("No scores to plot until `multicrop_summary.csv` exists.")
+else:
+    canonical = [m for m in MODELS if m in set(multicrop["model"])]
+    extra = [m for m in sorted(multicrop["model"].unique())
+             if m not in canonical]
+    all_models = canonical + extra
+
+    ctrl1, ctrl2, ctrl3 = st.columns([2, 3, 2])
+    with ctrl1:
+        metric_label = st.selectbox("Metric", list(METRIC_CHOICES))
+        metric = METRIC_CHOICES[metric_label]
+    with ctrl2:
+        shown = st.multiselect("Models", all_models, default=all_models)
+    with ctrl3:
+        overlay = st.checkbox("Mark taxonomy prediction", value=False)
+
+    subset = multicrop[multicrop["model"].isin(shown)]
+    if subset.empty or metric not in subset.columns:
+        st.info("Select at least one model to draw the heatmap.")
+    else:
+        pivot = subset.pivot_table(index="crop", columns="model",
+                                   values=metric, aggfunc="max")
+        pivot = pivot[[m for m in all_models if m in pivot.columns]]
+
+        is_r2 = metric == "r2"
+        fig = go.Figure(
+            data=go.Heatmap(
+                z=pivot.values,
+                x=list(pivot.columns),
+                y=list(pivot.index),
+                colorscale=R2_SCALE if is_r2 else ERROR_SCALE,
+                zmid=0 if is_r2 else None,
+                colorbar=dict(title=metric_label.split(" ")[0]),
+                texttemplate="%{z:.2f}",
+                textfont=dict(size=11, color=CELL_INK),
+                xgap=2, ygap=2,
+                hovertemplate=("Crop: %{y}<br>Model: %{x}<br>"
+                               f"{metric}: %{{z:.3f}}<extra></extra>"),
+            )
+        )
+
+        hits = 0
+        if overlay:
+            winners = (load_taxonomy() or {}).get("predicted_winners", {})
+            crop_order, model_order = list(pivot.index), list(pivot.columns)
+            shapes = []
+            for yi, crop in enumerate(crop_order):
+                pred = (winners.get(crop) or {}).get("primary")
+                if pred not in model_order:
+                    continue
+                xi = model_order.index(pred)
+                shapes.append(dict(
+                    type="rect", x0=xi - 0.5, x1=xi + 0.5,
+                    y0=yi - 0.5, y1=yi + 0.5,
+                    line=dict(color="#111111", width=3),
+                    fillcolor="rgba(0,0,0,0)", layer="above",
+                ))
+                row = pivot.loc[crop].dropna()
+                if not row.empty:
+                    winner = (row.idxmax() if is_r2 else row.idxmin())
+                    hits += int(winner == pred)
+            fig.update_layout(shapes=shapes)
+
+        fig.update_layout(
+            height=460, margin=dict(l=10, r=10, t=30, b=10),
+            xaxis_title="Model", yaxis_title="Crop",
+        )
+        st.plotly_chart(fig, width="stretch")
+
+        if overlay:
+            o1, _ = st.columns([1, 3])
+            with o1:
+                # st.metric direct, not utils.kpi, so the encoding note can
+                # ride along as a tooltip instead of another line of prose.
+                st.metric("Outline is the best cell in its row",
+                          f"{hits}/{len(pivot.index)} crops",
+                          help="Outline marks the a-priori primary from "
+                               "configs/taxonomy.yaml, scored against the "
+                               "metric selected above.")
+
+        if is_r2:
+            st.caption("Blue above zero, red below; zero is no better than "
+                       "predicting the crop mean. Source: "
+                       "multicrop_summary.csv.")
+        else:
+            st.caption("Darker is larger error, in dt/ha. Source: "
+                       "multicrop_summary.csv.")
+
+        with st.expander("Table view"):
+            st.dataframe(pivot.round(3), width="stretch")
+
+# --------------------------------------------------------------------------- #
+# Navigation
+# --------------------------------------------------------------------------- #
+divider("Go to")
+
+nav_targets = [
+    (PAGES / "02_Data.py", "Data"),
+    (PAGES / "17_Train.py", "Train models"),
+    (PAGES / "09_Leaderboard.py", "Leaderboard"),
+    (PAGES / "13_Taxonomy.py", "Crop-model taxonomy"),
+]
+for target, col in zip(nav_targets, st.columns(len(nav_targets))):
+    page, label = target
+    with col:
+        try:
+            st.page_link(str(page), label=label, width="stretch")
+        except Exception:
+            st.caption(f"{label}: pages/{page.name}")

@@ -1,16 +1,18 @@
 """Literature comparison — our best per-crop R² vs published EU/German
 crop-yield ML benchmarks.
 
-IMPORTANT CAVEAT (also shown to the user): each published study uses a
-different region, feature set, year range, and validation split. The
-numbers here are directional comparisons ("same ballpark", "below",
-"above"), not strict apples-to-apples R² values. Use this page to frame
-the related-work section of the report, not as a final citation table —
-verify the exact R² values against the PDFs before submission.
+IMPORTANT CAVEAT (also shown on the page): each published study uses a
+different region, feature set, year range, target definition, and split,
+so the "Verdict" column is directional only. Our own R² is scored on
+absolute dt/ha that is reconstructed as (per-district climatological
+baseline + predicted anomaly), on a 2-year test split — both facts move
+the R² denominator relative to a study regressing absolute yield over
+many years. Use this page to frame related work, not as a citation table.
 """
 from __future__ import annotations
 
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -18,7 +20,30 @@ import plotly.express as px
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from utils import METRICS_DIR, divider, kpi, load_taxonomy, page_header
+from utils import (CHECKPOINTS_DIR, METRICS_DIR, divider, kpi, load_taxonomy,
+                   page_header)
+
+
+def _stale_banner(*metric_paths: Path) -> None:
+    """Warn when a metric file predates the newest checkpoint on disk."""
+    ckpts = [*CHECKPOINTS_DIR.glob("*.pt"), *CHECKPOINTS_DIR.glob("*.ubj")]
+    if not ckpts:
+        return
+    newest = max(ckpts, key=lambda p: p.stat().st_mtime)
+    newest_mt = newest.stat().st_mtime
+    stale = [(p, p.stat().st_mtime) for p in metric_paths
+             if p.exists() and p.stat().st_mtime < newest_mt]
+    if not stale:
+        return
+    lines = "\n".join(
+        f"- `{p.name}` — {datetime.fromtimestamp(mt):%Y-%m-%d %H:%M}, "
+        f"{(newest_mt - mt) / 86400:.1f} days older"
+        for p, mt in stale)
+    st.warning(
+        "**Stale — these numbers are not from the models currently on "
+        f"disk.** Newest checkpoint `{newest.name}` is "
+        f"{datetime.fromtimestamp(newest_mt):%Y-%m-%d %H:%M}:\n\n" + lines
+    )
 
 st.set_page_config(page_title="Literature — Crop Yield Benchmark",
                    layout="wide")
@@ -128,14 +153,33 @@ if not summary_path.exists():
         "Run `python scripts/05b_eval_multicrop.py` to generate it."
     )
     st.stop()
+_stale_banner(summary_path)
 ours = pd.read_csv(summary_path)
-# Exclude TFT — see project memory: checkpoint is broken (R² ≈ -23 mean)
-ours_no_tft = ours[ours["model"] != "tft"].copy()
-best_per_crop = (ours_no_tft.loc[ours_no_tft.groupby("crop")["r2"].idxmax()]
+# All models compete. TFT used to be hard-excluded here on the grounds of a
+# broken checkpoint; that is no longer true, and its exclusion changed no
+# row anyway because it is never the per-crop best.
+best_per_crop = (ours.loc[ours.groupby("crop")["r2"].idxmax()]
                  [["crop", "model", "r2", "rmse", "n"]]
                  .rename(columns={"model": "our_best_model",
                                   "r2": "our_r2", "rmse": "our_rmse",
                                   "n": "our_n"}))
+
+# --------------------------------------------------------------------------- #
+# Why the Verdict column is directional only
+# --------------------------------------------------------------------------- #
+st.info(
+    "**These R² values are not directly comparable to the published ones.** "
+    "Our prediction is an anomaly that is added back to a per-district, "
+    "per-crop climatological baseline before scoring, so part of the R² "
+    "below comes from that baseline offset rather than from learned signal. "
+    "The split is also only the 2024-25 seasons, so the denominator carries "
+    "almost no inter-annual variance. The published studies differ again in "
+    "region, target, and split. Treat the Verdict column as directional."
+    + ("" if (METRICS_DIR / "climatology_baseline.csv").exists() else
+       " No climatology-baseline row exists in `results/metrics/`, so the "
+       "page cannot yet show how much of each R² a learn-nothing predictor "
+       "already achieves.")
+)
 
 # --------------------------------------------------------------------------- #
 # View 1 — Top-level leaderboard
@@ -160,7 +204,9 @@ def _verdict(our_r2: float, lit_low: float, lit_high: float) -> str:
 lit_per_crop = LITERATURE.groupby("crop", dropna=False).agg(
     lit_low=("r2_low", "min"),
     lit_high=("r2_high", "max"),
-    n_studies=("study", "count"),
+    # Count only rows that actually carry an R² range — the "(no dedicated
+    # study located)" placeholders are not studies.
+    n_studies=("r2_low", "count"),
 ).reset_index()
 
 leaderboard = best_per_crop.merge(lit_per_crop, on="crop", how="left")
@@ -231,21 +277,16 @@ st.dataframe(styled, hide_index=True, width="stretch")
 if tax:
     n_hits = int((leaderboard["taxonomy_match"] == "hit").sum())
     n_total = int((leaderboard["taxonomy_match"] != "—").sum())
-    st.caption(
-        f"**Bridge between taxonomy and literature:** on **{n_hits}/{n_total}** "
-        "crops the taxonomy's a-priori primary pick matches our observed best "
-        "model, which is what we then compare to published EU/German "
-        "benchmarks in the 'Verdict' column. The chain of reasoning is: "
-        "crop biology → taxonomy prediction → empirical validation → "
-        "literature comparison. Each column above is one link in that chain."
-    )
+    st.caption(f"Taxonomy's a-priori pick matches our observed best model on "
+               f"{n_hits}/{n_total} crops.")
 
 # Visual: dot plot of our R² with literature range bars per crop
 fig = px.scatter(
     leaderboard, x="our_r2", y="crop",
     hover_data=["our_best_model", "lit_low", "lit_high"],
     title="Our best R² vs published literature range, per crop",
-    labels={"our_r2": "Our R² (best of 5 models)", "crop": ""},
+    labels={"our_r2": f"Our R² (best of {ours['model'].nunique()} models)",
+            "crop": ""},
 )
 for _, row in leaderboard.iterrows():
     if pd.notna(row["lit_low"]):
@@ -262,11 +303,8 @@ fig.update_layout(height=420,
                   showlegend=False)
 fig.add_vline(x=0, line_dash="dot", line_color="grey")
 st.plotly_chart(fig, width="stretch")
-st.caption(
-    "Blue dot = our best model's R² for the crop on the 2024-2025 test set. "
-    "Grey bar = published literature range (lowest to highest reported R² "
-    "across the curated studies)."
-)
+st.caption("Grey bar = published range (lowest to highest reported R² across "
+           "the curated studies for that crop).")
 
 # --------------------------------------------------------------------------- #
 # View 2 — Per-crop drill-down with citations
@@ -309,10 +347,9 @@ else:
 # --------------------------------------------------------------------------- #
 # View 3 — All other models per crop (for "best wasn't the only one")
 # --------------------------------------------------------------------------- #
-divider("All 5 models on the selected crop")
+divider(f"All {ours['model'].nunique()} models on the selected crop")
 
-all_models = ours_no_tft[ours_no_tft["crop"] == sel_crop].sort_values(
-    "r2", ascending=False)
+all_models = ours[ours["crop"] == sel_crop].sort_values("r2", ascending=False)
 st.dataframe(
     all_models[["model", "r2", "rmse", "mae", "n"]].rename(
         columns={"model": "Model", "r2": "R²", "rmse": "RMSE",
@@ -325,11 +362,12 @@ st.dataframe(
 # Footer
 # --------------------------------------------------------------------------- #
 st.markdown("---")
+_means = ours.groupby("model")["r2"].mean().sort_values(ascending=False)
 st.caption(
-    "Editing this page: literature entries live in the `LITERATURE` "
-    "DataFrame at the top of `dashboard/pages/13_Literature.py`. Update "
-    "the R² ranges and citations from your actual reading list before "
-    "the final report — the values shipped here are best-effort literature "
-    "estimates, not verified replications. TFT is excluded from the "
-    "leaderboard (broken checkpoint, R² ≈ -23 mean)."
+    "Literature entries live in the `LITERATURE` DataFrame at the top of "
+    "`dashboard/pages/16_Literature.py`; the R² ranges there are "
+    "best-effort estimates, not verified replications — check them against "
+    "the PDFs before the report. Our side is read live from "
+    "`multicrop_summary.csv`; mean R² across the 10 crops is "
+    + ", ".join(f"{m} {v:.3f}" for m, v in _means.items()) + "."
 )

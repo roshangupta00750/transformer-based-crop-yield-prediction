@@ -2,17 +2,25 @@
 
 Reads ``results/metrics/counterfactual_daily_summary.csv`` and
 ``counterfactual_daily_district.csv`` (from ``scripts/13_counterfactual_daily.py``).
-Applies additive tasmax/tasmin deltas + multiplicative pr/rsds deltas to
-the 2024-25 observed daily features, then feeds each perturbed feature set
-into the existing daily-trained models. Reports predicted yield anomaly
-per (model, crop, scenario).
+The script applies additive tasmax/tasmin deltas and multiplicative pr/rsds
+deltas to the 2024-25 observed daily features, then re-predicts with the
+existing daily-trained models.
 
-Data source: EC-Earth3-CC monthly, r1i1p1f1 realization. See paper
-methodology; single-realization caveats explicitly documented.
+The rsds perturbation is INERT: feature policy v3 excludes
+``radiation_global`` (see ``configs/data.yaml`` -> ``features.excluded``),
+so no model consumes that column. These counterfactuals therefore measure
+the response to temperature and precipitation change only. The page
+verifies this live against the config and the checkpoint feature spec
+rather than asserting it.
+
+Which GCMs contributed is read from ``data/processed/cmip6_nuts3.parquet``,
+not hardcoded here.
 """
 from __future__ import annotations
 
+import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -20,7 +28,57 @@ import plotly.express as px
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from utils import METRICS_DIR, divider, kpi, page_header
+from utils import (CHECKPOINTS_DIR, METRICS_DIR, PROJECT_ROOT, divider, kpi,
+                   page_header)
+
+
+def _stale_banner(*metric_paths: Path) -> None:
+    """Warn when a metric file predates the newest checkpoint on disk."""
+    ckpts = [*CHECKPOINTS_DIR.glob("*.pt"), *CHECKPOINTS_DIR.glob("*.ubj")]
+    if not ckpts:
+        return
+    newest = max(ckpts, key=lambda p: p.stat().st_mtime)
+    newest_mt = newest.stat().st_mtime
+    stale = [(p, p.stat().st_mtime) for p in metric_paths
+             if p.exists() and p.stat().st_mtime < newest_mt]
+    if not stale:
+        return
+    lines = "\n".join(
+        f"- `{p.name}` — {datetime.fromtimestamp(mt):%Y-%m-%d %H:%M}, "
+        f"{(newest_mt - mt) / 86400:.1f} days older"
+        for p, mt in stale)
+    st.warning(
+        "**Stale — these numbers are not from the models currently on "
+        f"disk.** Newest checkpoint `{newest.name}` is "
+        f"{datetime.fromtimestamp(newest_mt):%Y-%m-%d %H:%M}:\n\n" + lines
+    )
+
+
+def _excluded_features() -> set[str]:
+    """Feature names the data policy excludes from every model."""
+    import yaml
+    p = PROJECT_ROOT / "configs" / "data.yaml"
+    if not p.exists():
+        return set()
+    cfg = yaml.safe_load(p.read_text()) or {}
+    return set((cfg.get("features") or {}).get("excluded") or [])
+
+
+def _model_input_features() -> set[str]:
+    """Union of every feature name across the checkpoint pipeline sidecars."""
+    names: set[str] = set()
+    for p in CHECKPOINTS_DIR.glob("*.pipeline.json"):
+        try:
+            spec = (json.loads(p.read_text()) or {}).get("spec") or {}
+        except (json.JSONDecodeError, OSError):
+            continue
+        for v in spec.values():
+            if isinstance(v, list):
+                names.update(str(x) for x in v)
+            elif isinstance(v, str):
+                names.add(v)
+    return names
+
 
 st.set_page_config(page_title="Climate counterfactual — Crop Yield Benchmark",
                    layout="wide")
@@ -28,28 +86,6 @@ page_header("Climate counterfactual (CMIP6 SSP2-4.5 / SSP5-8.5)",
             "Delta-method: apply (SSP future window - historical baseline) "
             "climate deltas to 2024-25 observed features, predict with the "
             "existing daily-trained models.")
-
-# Compute per-model SSP5-8.5 deltas live from the current counterfactual CSV,
-# so the TL;DR + detail blocks below never drift from the underlying numbers.
-_cc_path = METRICS_DIR / "counterfactual_daily_summary.csv"
-if _cc_path.exists():
-    _cc = pd.read_csv(_cc_path)
-    _ssp5 = _cc[_cc["scenario"] == "ssp5_8_5"]
-    _per_model_5 = _ssp5.groupby("model")["delta_pct"].mean().round(2)
-    _tas5 = float(_ssp5["tasmax_delta_C"].iloc[0]) if len(_ssp5) else float("nan")
-    _tas2 = float(_cc[_cc["scenario"] == "ssp2_4_5"]["tasmax_delta_C"].iloc[0]) \
-        if (_cc["scenario"] == "ssp2_4_5").any() else float("nan")
-    _min_model = _per_model_5.idxmin()
-    _max_model = _per_model_5.idxmax()
-    _min_val = _per_model_5.min()
-    _max_val = _per_model_5.max()
-    _per_model_str = ", ".join(f"{m} ({v:+.2f}%)" for m, v in _per_model_5.items())
-else:
-    _per_model_5 = pd.Series(dtype=float)
-    _tas5 = _tas2 = float("nan")
-    _min_model = _max_model = "—"
-    _min_val = _max_val = float("nan")
-    _per_model_str = "counterfactual CSV missing"
 
 summary_path = METRICS_DIR / "counterfactual_daily_summary.csv"
 district_path = METRICS_DIR / "counterfactual_daily_district.csv"
@@ -60,8 +96,43 @@ if not summary_path.exists():
     )
     st.stop()
 
+_stale_banner(summary_path, district_path)
+
 summary = pd.read_csv(summary_path)
 district = pd.read_csv(district_path) if district_path.exists() else pd.DataFrame()
+
+# --------------------------------------------------------------------------- #
+# What this experiment can and cannot show
+# --------------------------------------------------------------------------- #
+_excluded = _excluded_features()
+_model_feats = _model_input_features()
+_rad_perturbed = "radiation_global"          # the column scripts/13 scales by rsds
+_rad_reaches_models = (_rad_perturbed in _model_feats
+                       and _rad_perturbed not in _excluded)
+
+_limits = []
+if not _rad_reaches_models:
+    _limits.append(
+        f"**Solar radiation is inert.** `scripts/13_counterfactual_daily.py` "
+        f"scales `{_rad_perturbed}` by the CMIP6 rsds delta, but that column "
+        + ("is in `configs/data.yaml` -> `features.excluded`"
+           if _rad_perturbed in _excluded else
+           "is absent from every checkpoint's feature spec")
+        + ", so it reaches no model. These results are a response to "
+          "temperature and precipitation change only."
+    )
+_veg = sorted({"ndvi", "evi", "lai"} & _model_feats)
+if _veg:
+    _limits.append(
+        f"**No vegetation feedback.** Satellite indices ({', '.join(_veg)}) "
+        "are model inputs but are held at their observed 2024-25 values, so "
+        "the crop's own response to the perturbed climate is not simulated."
+    )
+if "humidity" in _model_feats:
+    _limits.append("**Humidity is held constant** — no CMIP6 counterpart is "
+                   "applied.")
+if _limits:
+    st.info("\n\n".join(_limits))
 
 # --------------------------------------------------------------------------- #
 # Headline KPIs
@@ -79,6 +150,18 @@ if "ssp5_8_5" in deltas.index:
     d = deltas.loc["ssp5_8_5"]
     with k3: kpi("SSP5-8.5 tasmax Δ", f"{d['tasmax_delta_C']:+.2f} °C")
     with k4: kpi("SSP5-8.5 precip Δ", f"{d['pr_pct_delta']:+.1f} %")
+
+if {"ssp2_4_5", "ssp5_8_5"} <= set(deltas.index):
+    _t2 = float(deltas.loc["ssp2_4_5", "tasmax_delta_C"])
+    _t5 = float(deltas.loc["ssp5_8_5", "tasmax_delta_C"])
+    if _t5 <= _t2:
+        st.error(
+            f"**Applied signal is physically inconsistent.** SSP5-8.5 warms "
+            f"less ({_t5:+.2f} °C) than SSP2-4.5 ({_t2:+.2f} °C) in this "
+            "run. The high-forcing scenario must warm more, so the delta "
+            "extraction in `scripts/13_counterfactual_daily.py` is suspect "
+            "and every per-scenario comparison below inherits the fault."
+        )
 
 # --------------------------------------------------------------------------- #
 # Per-crop mean predicted yield delta (across models)
@@ -103,7 +186,8 @@ fig = px.bar(
     long.sort_values("delta_pct"), x="delta_pct", y="crop",
     color="scenario", barmode="group", orientation="h",
     labels={"delta_pct": "Predicted yield delta (%)", "crop": ""},
-    title="Predicted yield change per crop, mean across 5 base models",
+    title=f"Predicted yield change per crop, mean across "
+          f"{summary['model'].nunique()} models",
 )
 fig.add_vline(x=0, line_dash="dot", line_color="grey")
 fig.update_layout(height=440)
@@ -219,13 +303,25 @@ if not district.empty:
 # Footer
 # --------------------------------------------------------------------------- #
 st.markdown("---")
+
+# GCM list read from the processed CMIP6 parquet — never hardcoded.
+_cmip_path = PROJECT_ROOT / "data" / "processed" / "cmip6_nuts3.parquet"
+_gcm_txt = ""
+if _cmip_path.exists():
+    try:
+        _c = pd.read_parquet(_cmip_path, columns=["model"])
+        _gcms = sorted(_c["model"].astype(str).unique())
+        _gcm_txt = f"CMIP6 ensemble over {len(_gcms)} GCM(s): {', '.join(_gcms)}. "
+    except (ValueError, KeyError, OSError):
+        _gcm_txt = ""
+
 st.caption(
-    "**Methodology:** CMIP6 3-model ensemble (EC-Earth3-CC + MPI-ESM1-2-LR "
-    "+ MRI-ESM2-0, all r1i1p1f1), monthly output. Historical baseline "
-    "2003-2014, future window 2046-2050. Delta method: ensemble-mean "
-    "monthly deltas applied to daily 2024-25 features (additive for "
-    "tasmax/tasmin, multiplicative for pr/rsds — the latter sidesteps "
-    "the DWD J/cm²/day vs CMIP6 W/m² unit mismatch). Regenerate: "
-    "`python scripts/09_cmip6_pull.py --model <name> && python scripts/"
-    "10_cmip6_process.py && python scripts/13_counterfactual_daily.py`."
+    "**Methodology:** " + _gcm_txt +
+    "Monthly output; historical baseline 2003-2014, future window "
+    "2046-2050. Ensemble-mean monthly deltas are applied to the daily "
+    "2024-25 features — additive for tasmax/tasmin, multiplicative for pr. "
+    "The rsds delta is applied to `radiation_global`, which no model "
+    "consumes under feature policy v3 (see the note at the top). "
+    "Regenerate: `python scripts/09_cmip6_pull.py --model <name> && python "
+    "scripts/10_cmip6_process.py && python scripts/13_counterfactual_daily.py`."
 )

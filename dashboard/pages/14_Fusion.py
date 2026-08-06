@@ -1,25 +1,22 @@
 """Cross-model fusion page — 5-model vs 6-model comparison.
 
 Reads two paired output sets:
-    fusion_summary_5models.csv  — TFT excluded (was broken before H100 fix)
-    fusion_summary_6models.csv  — TFT included (post 6h H100 retrain)
+    fusion_summary_5models.csv  — TFT excluded from the pool
+    fusion_summary_6models.csv  — TFT included
 
-The 5-vs-6 comparison IS the paper's methodological story: when a
-specialist model with heterogeneous crop-quality (like our 6h-trained TFT
-that excels on root crops but fails on cereals) enters the fusion pool,
-which fusion method degrades gracefully vs pathologically?
+The 5-vs-6 comparison is the methodological question: when a specialist
+model with uneven per-crop quality enters the fusion pool, which fusion
+method degrades gracefully and which degrades pathologically?
 
-Methods compared:
-    ridge_alpha1        — Ridge(alpha=1.0)
-    nnls                — Non-negative least squares
-    simple_avg          — Uniform mean
-    weighted_avg_valr2  — Mean weighted by base val R² (max(0, r2))
-    median              — Per-sample median
-    best_single_by_val  — Val-best single model per crop (per-crop selection)
+The set of fusion methods is read from the CSV, not hardcoded here — the
+generating script has added methods over time. `best_single_by_val`
+(val-best single model per crop) is treated as the baseline, everything
+else as a fusion method.
 """
 from __future__ import annotations
 
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -27,20 +24,48 @@ import plotly.express as px
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from utils import (METRICS_DIR, divider, kpi, load_multicrop_summary,
-                   load_taxonomy, page_header)
+from utils import (CHECKPOINTS_DIR, METRICS_DIR, divider, kpi,
+                   load_multicrop_summary, load_taxonomy, page_header)
+
+
+def _stale_banner(*metric_paths: Path) -> None:
+    """Warn when a metric file predates the newest checkpoint on disk.
+
+    Anything older than the newest checkpoint was, by construction, not
+    produced by the models currently in results/checkpoints/.
+    """
+    ckpts = [*CHECKPOINTS_DIR.glob("*.pt"), *CHECKPOINTS_DIR.glob("*.ubj")]
+    if not ckpts:
+        return
+    newest = max(ckpts, key=lambda p: p.stat().st_mtime)
+    newest_mt = newest.stat().st_mtime
+    stale = [(p, p.stat().st_mtime) for p in metric_paths
+             if p.exists() and p.stat().st_mtime < newest_mt]
+    if not stale:
+        return
+    lines = "\n".join(
+        f"- `{p.name}` — {datetime.fromtimestamp(mt):%Y-%m-%d %H:%M}, "
+        f"{(newest_mt - mt) / 86400:.1f} days older"
+        for p, mt in stale)
+    st.warning(
+        "**Stale — these numbers are not from the models currently on "
+        f"disk.** Newest checkpoint `{newest.name}` is "
+        f"{datetime.fromtimestamp(newest_mt):%Y-%m-%d %H:%M}:\n\n" + lines
+    )
 
 st.set_page_config(page_title="Fusion — Crop Yield Benchmark", layout="wide")
 page_header("Cross-model fusion (5 vs 6 models)",
             "How does the fusion leaderboard change when a specialist model "
             "with uneven per-crop quality enters the pool? Compares 5-model "
             "(no TFT) vs 6-model (TFT included) fusion side-by-side.")
-st.caption("_Does the taxonomy's winner still lead once ensembles enter the arena? — six fusion methods on 5-model versus 6-model pools with per-crop taxonomy overlay._")
 
 # Prefer new dual output; fall back to legacy single file for backward compat.
 sum_5 = METRICS_DIR / "fusion_summary_5models.csv"
 sum_6 = METRICS_DIR / "fusion_summary_6models.csv"
 legacy = METRICS_DIR / "fusion_summary.csv"
+
+_stale_banner(sum_5, sum_6, legacy,
+              METRICS_DIR / "fusion_coefficients_6models.csv")
 if not (sum_5.exists() and sum_6.exists()):
     if legacy.exists():
         st.info("Only the legacy single-file fusion output is present. "
@@ -63,8 +88,7 @@ if not coef_path.exists():
 coef = pd.read_csv(coef_path) if coef_path.exists() else pd.DataFrame()
 
 
-# Hoisted so it's available for every table on the page (called from
-# multiple locations below, including line ≈215 in the per-crop showdown).
+# Hoisted — used by several tables below.
 def _highlight_lift(val):
     if pd.isna(val):
         return ""
@@ -136,23 +160,22 @@ else:
     styled = disp.style.format(fmt)
 st.dataframe(styled, hide_index=True, width="stretch")
 
-if (
-    "Δ (6-5)" in pivot_r2.columns
-    and "best_single_by_val" in pivot_r2.index
-):
-    _bsbv_delta = float(pivot_r2.loc["best_single_by_val", "Δ (6-5)"])
-    _bsbv_txt = f"({_bsbv_delta:+.3f})"
-else:
-    _bsbv_txt = ""
-
-st.caption(
-    "**Reading the Δ column:** positive = adding TFT to the pool helped this "
-    "method; negative = TFT dragged the method down. Ridge is the fragile case "
-    "(learns pathological sign-flips on TFT). NNLS and weighted-avg-valr2 both "
-    "have non-negativity guardrails and degrade gracefully. `best_single_by_val` "
-    f"improves from adding TFT {_bsbv_txt} — TFT wins several crops "
-    "individually, so per-crop selection benefits directly from having it available."
-)
+if "Δ (6-5)" in pivot_r2.columns:
+    _d = pivot_r2["Δ (6-5)"].dropna()
+    _n_up = int((_d > 0).sum())
+    _worst, _worst_v = _d.idxmin(), _d.min()
+    _best, _best_v = _d.idxmax(), _d.max()
+    # How often is TFT actually the val-selected model in the 6-model pool?
+    _bsbv6 = summary[(summary["variant"] == "6models")
+                     & (summary["method"] == "best_single_by_val")]
+    _tft_picked = int((_bsbv6["best_model"].astype(str) == "tft").sum()) \
+        if "best_model" in _bsbv6.columns else 0
+    st.caption(
+        f"Δ = adding TFT to the pool. {_n_up}/{len(_d)} methods improve; "
+        f"worst is `{_worst}` ({_worst_v:+.3f}), best is `{_best}` "
+        f"({_best_v:+.3f}). Validation picks TFT for {_tft_picked}/"
+        f"{_bsbv6['crop'].nunique()} crops."
+    )
 
 # --------------------------------------------------------------------------- #
 # Variant selector for the drill-down views below
@@ -250,27 +273,19 @@ if "Taxonomy verdict" in display.columns:
 
 st.dataframe(styled, hide_index=True, width="stretch")
 
+_bits = []
 if "Taxonomy verdict" in display.columns:
-    n_tax_hits = int((showdown["taxonomy_hit"] == "hit").sum())
-    st.caption(
-        f"**Taxonomy vs fusion:** on **{n_tax_hits}/{len(showdown)}** "
-        "crops the taxonomy's a-priori primary pick matches the observed "
-        "best single model. Comparing that with the best fusion method per "
-        "crop shows whether fusion adds anything beyond validation-based "
-        "expert selection (fusion's best-per-crop R² vs the single "
-        "taxonomy-predicted model's R²)."
-    )
-
-n_wins = int((showdown["lift"] > 0).sum())
-n_rescues = int(((showdown["baseline_r2"] < 0) &
-                 (showdown["best_fusion_r2"] > 0)).sum())
-st.caption(
-    f"Fusion's best-per-crop method beats the val-best single model on "
-    f"**{n_wins}/{len(showdown)}** crops; it rescues **{n_rescues}** crop(s) "
-    "where the val-best single model scored negative on the test set "
-    "(meaning validation picked a model that failed to generalize to "
-    "2024-25)."
-)
+    _bits.append(f"taxonomy a-priori pick matches the observed best single "
+                 f"model on {int((showdown['taxonomy_hit'] == 'hit').sum())}/"
+                 f"{len(showdown)} crops")
+_bits.append(f"best fusion method beats the val-best single model on "
+             f"{int((showdown['lift'] > 0).sum())}/{len(showdown)} crops")
+_n_rescues = int(((showdown["baseline_r2"] < 0)
+                  & (showdown["best_fusion_r2"] > 0)).sum())
+if _n_rescues:
+    _bits.append(f"rescues {_n_rescues} crop(s) where validation picked a "
+                 "model that went negative on the 2024-25 test split")
+st.caption("; ".join(_bits).capitalize() + ".")
 
 # --------------------------------------------------------------------------- #
 # Per-crop comparison heatmap
@@ -278,20 +293,24 @@ st.caption(
 divider("Per-crop R² across all methods")
 
 pivot = summary.pivot(index="crop", columns="method", values="r2")
-# Order methods so baseline is first, fusion methods after
-method_order = ["best_single_by_val", "simple_avg", "median",
-                "weighted_avg_valr2", "nnls", "ridge_alpha1"]
-pivot = pivot.reindex(columns=[m for m in method_order if m in pivot.columns])
+# Baseline column first, then every fusion method present in the CSV ordered
+# by mean R². Do NOT hardcode a method list — the generating script has
+# added methods over time and a fixed list silently hides them.
+_rest = [m for m in pivot.mean(axis=0).sort_values(ascending=False).index
+         if m != "best_single_by_val"]
+pivot = pivot.reindex(
+    columns=(["best_single_by_val"] if "best_single_by_val" in pivot.columns
+             else []) + _rest)
 
 fig = px.imshow(
     pivot, color_continuous_scale="RdYlGn",
     color_continuous_midpoint=0, zmin=-0.5, zmax=0.8,
     labels=dict(x="Method", y="Crop", color="R²"),
     aspect="auto", text_auto=".2f",
-    title="Test-set R² per (crop, fusion method). "
-          "Greener = better. Left column = best single model baseline.",
+    title=f"Test-set R² per (crop, method) — {pivot.shape[1]} methods, "
+          "leftmost column is the best-single-by-val baseline",
 )
-fig.update_layout(height=440)
+fig.update_layout(height=max(440, 26 * len(pivot)))
 st.plotly_chart(fig, width="stretch")
 
 # --------------------------------------------------------------------------- #
@@ -349,24 +368,27 @@ if not coef.empty:
         )
         fig.update_layout(height=420)
         st.plotly_chart(fig, width="stretch")
-        st.caption(
-            "Larger = meta-learner relies on that base model more for the "
-            "crop. Negative ridge weights mean the meta-learner uses the "
-            "base prediction in the opposite direction — usually a "
-            "warning sign that the val and test years disagree."
-        )
+        st.caption("Negative weights mean the meta-learner uses that base "
+                   "prediction in the opposite direction — a sign the "
+                   "validation and test years disagree.")
 
 # --------------------------------------------------------------------------- #
 # Footer
 # --------------------------------------------------------------------------- #
 st.markdown("---")
+_n_base = sorted(pd.read_csv(sum_6)["n_base"].unique()) if sum_6.exists() else []
+_cache_hits = sorted(METRICS_DIR.glob("fusion_predictions_*.parquet"))
 st.caption(
-    "**Methodology:** 5 base models (xgboost / dlinear / itransformer / "
-    "lstm / patchtst) predict on the 2023 validation split. Six fusion "
-    "approaches are then applied — ridge / NNLS / simple average / "
-    "weighted average / median — and compared to the 'best single model "
-    "by validation' baseline on the 2024-25 test split. TFT excluded "
-    "(broken checkpoint). Raw predictions are cached at "
-    "`results/metrics/fusion_predictions_{val,test}.parquet` so re-runs "
-    "of `scripts/07_fusion.py` are seconds, not 50-80 minutes."
+    "**Methodology:** base models predict on the 2023 validation split; "
+    "fusion weights are fit there and applied to the 2024-25 test split, "
+    "against a 'best single model by validation' baseline. The 5-model "
+    "variant excludes TFT from the pool, the 6-model variant includes it"
+    + (f" (pool sizes present in the CSV: {_n_base})." if _n_base else ".")
+    + " Regenerate: `python scripts/07_fusion.py --exclude tft --suffix "
+      "_5models` and `python scripts/07_fusion.py --suffix _6models`. "
+    + (f"Prediction cache present ({len(_cache_hits)} parquet file(s)), so "
+       "re-runs are fast."
+       if _cache_hits else
+       "No `fusion_predictions_*.parquet` cache on disk, so a re-run "
+       "re-predicts from the checkpoints and takes tens of minutes.")
 )
