@@ -19,4 +19,9 @@ batch_size: 128
 # works (from_dataset + EarlyStopping + ModelCheckpoint), a larger budget can
 # be spent safely: training stops on the val plateau if it arrives first, and
 # the weights kept are the best-validation ones either way.
-max_minutes: 180
+# Reverted 180 -> 60. TFT terminated at the wall clock at 60, 120 AND 180
+# minutes, and mean R2 fell as the budget rose (0.130 -> 0.096 -> 0.052 ->
+# -0.037). The extra compute bought nothing, and a 3-hour job on a
+# preemptable queue is three times more likely to be evicted mid-run and
+# restarted from scratch.
+max_minutes: 60

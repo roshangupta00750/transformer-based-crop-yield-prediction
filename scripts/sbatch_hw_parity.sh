@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=hw-parity
-#SBATCH --qos=normal
+#SBATCH --qos=computervision
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=01:30:00

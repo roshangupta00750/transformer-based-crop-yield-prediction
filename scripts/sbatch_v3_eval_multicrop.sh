@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=cyp-v3-eval
 #SBATCH --partition=standard
-#SBATCH --qos=normal
+#SBATCH --qos=computervision
 #SBATCH --gres=gpu:L40:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
