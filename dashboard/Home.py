@@ -441,10 +441,19 @@ chain = [
     ("results/checkpoints (newest)",
      float(newest_ckpt.max()) if not newest_ckpt.empty else None),
     ("results/metrics/multicrop_summary.csv", summary_mtime),
-    ("results/metrics/climatology_baseline.csv", _mtime(CLIMATOLOGY_PATH)),
     ("results/metrics/taxonomy_validation.csv",
      _mtime(TAXONOMY_VALIDATION_PATH)),
 ]
+# climatology_baseline.csv is deliberately NOT a stage in this chain. It is a
+# parallel branch off the parquet — it emits each district's train-fitted
+# baseline and consumes no checkpoint — so requiring it to be newer than
+# multicrop_summary.csv would raise a permanent false alarm. It only has to
+# be newer than the dataset it was fitted on.
+clim_mtime = _mtime(CLIMATOLOGY_PATH)
+clim_stale = bool(
+    clim_mtime is not None and facts and facts.get("mtime") is not None
+    and clim_mtime < facts["mtime"]
+)
 # Each stage must be newer than *everything* upstream of it, not merely than
 # the stage directly above — otherwise one stale stage lowers the bar for the
 # next and the rot stops being visible.
@@ -469,6 +478,13 @@ if stale:
         + ", ".join(f"`{s}`" for s in stale)
         + ". Each stage must be newer than every stage above it. Full chain "
           "under Provenance below."
+    )
+if clim_stale:
+    st.warning(
+        "`results/metrics/climatology_baseline.csv` predates "
+        "`data/processed/dataset.parquet`, so the learn-nothing reference in "
+        "the KPI row and the heatmap was fitted on an older panel than the "
+        "models were. Regenerate it before quoting the comparison."
     )
 
 with st.expander("Data coverage per crop", expanded=False):
@@ -531,6 +547,13 @@ with st.expander("Provenance — artefact freshness chain", expanded=False):
             + ", ".join(f"`{s}`" for s in stale)
             + ". Each stage must be newer than every stage above it."
         )
+    st.caption(
+        f"`{CLIMATOLOGY_PATH.name}` written {_stamp(clim_mtime)}. It is a "
+        "parallel branch off the parquet, not a stage in the chain above: it "
+        "consumes no checkpoint, so it only has to be newer than "
+        "`dataset.parquet` — it is "
+        + ("not." if clim_stale else "current on that test.")
+    )
     st.caption(f"Results feature policy: {RESULTS_POLICY_PATH.name}, written "
                f"{_stamp(_mtime(RESULTS_POLICY_PATH))}. Cached readers hold "
                "values for up to 5 minutes; use Reload from disk to bust them.")

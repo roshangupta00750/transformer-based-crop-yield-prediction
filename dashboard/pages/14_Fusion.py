@@ -45,6 +45,12 @@ def _stale_banner(*metric_paths: Path) -> None:
     Anything older than the newest checkpoint was, by construction, not
     produced by the models currently in results/checkpoints/. A firing
     warning stays at the top of the page, never inside an expander.
+
+    Pass only the files this page actually read. Passing every candidate path
+    put `fusion_summary.csv` — the legacy single-file output, which is not
+    loaded at all once the 5/6 pair exists — into the banner as its oldest and
+    loudest entry, so the one element that may never be collapsed was
+    reporting rot in an artefact that contributes nothing to the page.
     """
     ckpts = [*CHECKPOINTS_DIR.glob("*.pt"), *CHECKPOINTS_DIR.glob("*.ubj")]
     if not ckpts:
@@ -77,8 +83,6 @@ sum_5 = METRICS_DIR / "fusion_summary_5models.csv"
 sum_6 = METRICS_DIR / "fusion_summary_6models.csv"
 legacy = METRICS_DIR / "fusion_summary.csv"
 
-_stale_banner(sum_5, sum_6, legacy,
-              METRICS_DIR / "fusion_coefficients_6models.csv")
 if not (sum_5.exists() and sum_6.exists()):
     if legacy.exists():
         st.info("Only the legacy single-file fusion output is present. "
@@ -87,6 +91,7 @@ if not (sum_5.exists() and sum_6.exists()):
                 "`python scripts/07_fusion.py --suffix _6models`")
         summary = pd.read_csv(legacy)
         summary["variant"] = "legacy"
+        _loaded = [legacy]
     else:
         st.warning("No fusion summaries found. Run `python scripts/07_fusion.py`.")
         st.stop()
@@ -94,11 +99,18 @@ else:
     df5 = pd.read_csv(sum_5); df5["variant"] = "5models"
     df6 = pd.read_csv(sum_6); df6["variant"] = "6models"
     summary = pd.concat([df5, df6], ignore_index=True)
+    _loaded = [sum_5, sum_6]
 
 coef_path = METRICS_DIR / "fusion_coefficients_6models.csv"
 if not coef_path.exists():
     coef_path = METRICS_DIR / "fusion_coefficients.csv"
 coef = pd.read_csv(coef_path) if coef_path.exists() else pd.DataFrame()
+if coef_path.exists():
+    _loaded.append(coef_path)
+
+# Judged against what was actually read above, so the banner cannot name a
+# file that contributes nothing to this page.
+_stale_banner(*_loaded)
 
 
 # Hoisted — used by several tables below.
