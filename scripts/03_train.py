@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from functools import partial
 from pathlib import Path
@@ -152,7 +153,13 @@ def main() -> None:
 
     model = build_model(args.model, model_cfg)
     # Per-model budget overrides (model_cfg wins, else experiment.yaml default)
-    _budget = exp_cfg["budget"]
+    _budget = dict(exp_cfg["budget"])
+    if os.environ.get("CROP_YIELD_SMOKE"):
+        # preflight's end-to-end check: exercise imports, signatures,
+        # checkpoint naming and metadata writing without buying an hour of GPU.
+        _budget = {**_budget, "max_epochs": 1, "max_minutes": 1,
+                   "early_stopping_patience": 1}
+        log.info("SMOKE MODE: 1 epoch / 1 minute budget")
     trainer = Trainer(
         model=model, device=device,
         max_epochs=model_cfg.get("max_epochs", _budget["max_epochs"]),

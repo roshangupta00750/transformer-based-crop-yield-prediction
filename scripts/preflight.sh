@@ -119,6 +119,29 @@ ssh -T "$REMOTE" "cd $RROOT && \
   echo \"     per-crop TFT   : \$(ls -1 results/checkpoints/tft_*.pt 2>/dev/null | grep -v abs | wc -l)/10\" && \
   echo \"     venv           : \$(test -d ~/agri-venv && echo present || echo MISSING)\""
 
+echo "=== 8. smoke: does the training entrypoint actually RUN on the cluster? ==="
+# The checks above validate the ENVIRONMENT. None of them execute the code
+# path, so a signature mismatch between two synced-but-incompatible files
+# survives every one of them. That is not hypothetical: five jobs trained for
+# 31-60 minutes each and then died on the final line with
+#     TypeError: Trainer.save_metadata() got an unexpected kwarg 'name'
+# roughly 4.5 GPU-hours lost to an error a 60-second run would have surfaced.
+#
+# This runs the real entrypoint end to end on one crop with a 1-minute budget,
+# so imports, signatures, checkpoint naming and metadata writing are all
+# exercised before an hour of GPU time is committed.
+_smoke=$(ssh -T "$REMOTE" "cd $RROOT && source ~/agri-venv/bin/activate 2>/dev/null && \
+  timeout 600 python -u scripts/03_train.py --model dlinear --crop rye \
+    --suffix _smoketest 2>&1 | tail -25" 2>&1)
+if printf '%s' "$_smoke" | grep -qE "Traceback|Error:|error:"; then
+  bad "training entrypoint raises"
+  printf '%s\n' "$_smoke" | grep -E "Traceback|Error|File \"" | head -6 | sed 's/^/        /'
+else
+  ok "training entrypoint runs end to end"
+  ssh -T "$REMOTE" "rm -f $RROOT/results/checkpoints/dlinear_smoketest.* \
+                       $RROOT/results/metrics/dlinear_smoketest_meta.json" 2>/dev/null
+fi
+
 echo
 if [ "$fails" -eq 0 ]; then
   printf '\033[32mPREFLIGHT CLEAN — safe to sbatch\033[0m\n'
