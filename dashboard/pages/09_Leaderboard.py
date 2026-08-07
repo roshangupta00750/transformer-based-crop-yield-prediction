@@ -191,13 +191,10 @@ mc["skill"] = mc["r2"] - mc["clim_r2"]
 # --------------------------------------------------------------------------- #
 # Headline
 # --------------------------------------------------------------------------- #
-divider("Skill floor")
+divider("Does anything beat doing nothing?")
 st.caption(
-    "R² is measured in absolute dt/ha while the models predict a district "
-    "anomaly, so every model is handed its district's long-run mean for free. "
-    "The climatology reference is that free lunch alone — the district "
-    "baseline carried forward on its train-only trend, with the weather-driven "
-    "anomaly set to zero. A model only demonstrates skill above this line."
+    "The climatology reference predicts each district's long-run baseline yield "
+    "and nothing else. A model only demonstrates skill above that line."
 )
 
 by_model = (mc.groupby("model")
@@ -233,8 +230,6 @@ with k4:
 # --------------------------------------------------------------------------- #
 # Leaderboard, grouped by architecture class
 # --------------------------------------------------------------------------- #
-divider("Mean R² per model, by architecture class")
-
 rows = []
 if clim_mean == clim_mean:
     rows.append({
@@ -266,14 +261,15 @@ def _skill_ink(v):
     return "color: #2a78d6" if v > 0 else "color: #e34948"
 
 
-st.dataframe(
+board_styler = (
     board.style
          .format({"Mean R²": "{:.3f}", "Median R²": "{:.3f}",
                   "Min R²": "{:.3f}", "Max R²": "{:.3f}",
                   "Mean skill vs null": "{:+.3f}"}, na_rep="—")
-         .map(_skill_ink, subset=["Mean skill vs null"]),
-    width="stretch", hide_index=True,
+         .map(_skill_ink, subset=["Mean skill vs null"])
 )
+
+divider("Mean R² per model, against the climatology reference")
 
 fig = go.Figure()
 bar_order: list[str] = []
@@ -366,86 +362,124 @@ st.caption(
     f"({', '.join(m for m in present if m in BASELINES)})."
 )
 
-# --------------------------------------------------------------------------- #
-# Family compatibility
-# --------------------------------------------------------------------------- #
-if tax and clim_by_crop:
-    divider("Crop phenology family × model architecture family")
-    st.caption("Cell value is mean skill against the null reference, not raw R².")
-    crop_fam = {c: v.get("phenology_family", "unknown")
-                for c, v in tax.get("crops", {}).items()}
-    model_fam = {m: v.get("architecture_family", "unknown")
-                 for m, v in tax.get("models", {}).items()}
-    mc2 = mc.copy()
-    mc2["crop_family"] = mc2["crop"].map(crop_fam)
-    mc2["model_family"] = mc2["model"].map(model_fam)
-    fam_pivot = (mc2.dropna(subset=["skill"])
-                    .groupby(["crop_family", "model_family"])["skill"]
-                    .mean().unstack())
-    lim = float(np.nanmax(np.abs(fam_pivot.to_numpy()))) or 1.0
-    fig = px.imshow(
-        fam_pivot, color_continuous_scale=SKILL_SCALE,
-        zmin=-lim, zmax=lim, aspect="auto", text_auto=".3f",
-        labels=dict(x="Model architecture family",
-                    y="Crop phenology family", color="Mean skill vs null"),
-    )
-    fig.update_layout(height=420)
-    st.plotly_chart(fig, width="stretch")
-    st.dataframe(fam_pivot.style.format("{:+.3f}", na_rep="—"), width="stretch")
-
-# --------------------------------------------------------------------------- #
-# Single-crop drilldown
-# --------------------------------------------------------------------------- #
-divider("Single-crop ranking")
-sel_crop = st.selectbox(
-    "Crop", crop_order,
-    index=crop_order.index("winter_wheat") if "winter_wheat" in crop_order else 0,
-)
-
-cw = (mc[mc["crop"] == sel_crop]
-      .sort_values("r2", ascending=False)
-      .reset_index(drop=True))
-cw["Rank"] = cw.index + 1
-# Margin over the next model down — a "win" smaller than this is not a result.
-cw["margin"] = cw["r2"] - cw["r2"].shift(-1)
-cw["Class"] = cw["model"].map(model_class)
-cw["Taxonomy pick"] = cw["model"].map(
-    lambda m: {"primary": "PRIMARY", "alternate": "alternate", "": "—"}[
-        taxonomy_verdict(sel_crop, m, tax)])
-
-if len(cw) >= 2:
-    top_margin = float(cw.at[0, "margin"])
-    top_skill = float(cw.at[0, "skill"]) if cw["skill"].notna().all() else float("nan")
-    msg = (f"Winner **{cw.at[0, 'model']}** leads the runner-up "
-           f"**{cw.at[1, 'model']}** by **{top_margin:.3f}** R².")
-    if top_skill == top_skill:
-        msg += (f" Against the climatology reference "
-                f"({clim_by_crop[sel_crop]:.3f}) it is **{top_skill:+.3f}**.")
-    if top_margin < 0.01:
-        st.warning(msg + " A margin under 0.01 R² is inside run-to-run noise — "
-                          "treat this crop as a tie, not a win.")
-    elif top_skill == top_skill and top_skill <= 0:
-        st.warning(msg + " No model on this crop beats the null reference.")
-    else:
-        st.info(msg)
-
-show = cw[["Rank", "model", "Class", "Taxonomy pick", "r2", "skill", "margin",
-           "rmse", "mae", "n"]].rename(columns={
-    "model": "Model", "r2": "R²", "skill": "Skill vs null",
-    "margin": "Margin over next", "rmse": "RMSE (dt/ha)", "mae": "MAE",
-    "n": "n"})
-st.dataframe(
-    show.style.format({"R²": "{:.3f}", "Skill vs null": "{:+.3f}",
-                       "Margin over next": "{:.3f}", "RMSE (dt/ha)": "{:.2f}",
-                       "MAE": "{:.2f}"}, na_rep="—")
-              .map(_skill_ink, subset=["Skill vs null"]),
-    width="stretch", hide_index=True,
-)
-
 st.markdown("---")
-st.caption(
-    "Sources: `results/metrics/multicrop_summary.csv` "
-    "(`python scripts/05b_eval_multicrop.py`) and "
-    "`results/metrics/climatology_baseline.csv` (recomputed on this page "
-    "whenever the processed dataset or a fitted pipeline is newer)."
-)
+
+# --------------------------------------------------------------------------- #
+# Secondary — collapsed by default. Nothing here is deleted, only folded away.
+# --------------------------------------------------------------------------- #
+with st.expander("Per-model detail — full table and single-crop ranking",
+                 expanded=False):
+    st.markdown("##### Mean, median and spread per model")
+    st.dataframe(board_styler, width="stretch", hide_index=True)
+
+    st.markdown("##### Single-crop ranking")
+    sel_crop = st.selectbox(
+        "Crop", crop_order,
+        index=(crop_order.index("winter_wheat")
+               if "winter_wheat" in crop_order else 0),
+    )
+
+    cw = (mc[mc["crop"] == sel_crop]
+          .sort_values("r2", ascending=False)
+          .reset_index(drop=True))
+    cw["Rank"] = cw.index + 1
+    # Margin over the next model down — a "win" smaller than this is not a result.
+    cw["margin"] = cw["r2"] - cw["r2"].shift(-1)
+    cw["Class"] = cw["model"].map(model_class)
+    cw["Taxonomy pick"] = cw["model"].map(
+        lambda m: {"primary": "PRIMARY", "alternate": "alternate", "": "—"}[
+            taxonomy_verdict(sel_crop, m, tax)])
+
+    if len(cw) >= 2:
+        top_margin = float(cw.at[0, "margin"])
+        top_skill = (float(cw.at[0, "skill"]) if cw["skill"].notna().all()
+                     else float("nan"))
+        msg = (f"Winner **{cw.at[0, 'model']}** leads the runner-up "
+               f"**{cw.at[1, 'model']}** by **{top_margin:.3f}** R².")
+        if top_skill == top_skill:
+            msg += (f" Against the climatology reference "
+                    f"({clim_by_crop[sel_crop]:.3f}) it is **{top_skill:+.3f}**.")
+        if top_margin < 0.01:
+            st.warning(msg + " A margin under 0.01 R² is inside run-to-run "
+                             "noise — treat this crop as a tie, not a win.")
+        elif top_skill == top_skill and top_skill <= 0:
+            st.warning(msg + " No model on this crop beats the null reference.")
+        else:
+            st.info(msg)
+
+    show = cw[["Rank", "model", "Class", "Taxonomy pick", "r2", "skill",
+               "margin", "rmse", "mae", "n"]].rename(columns={
+        "model": "Model", "r2": "R²", "skill": "Skill vs null",
+        "margin": "Margin over next", "rmse": "RMSE (dt/ha)", "mae": "MAE",
+        "n": "n"})
+    st.dataframe(
+        show.style.format({"R²": "{:.3f}", "Skill vs null": "{:+.3f}",
+                           "Margin over next": "{:.3f}",
+                           "RMSE (dt/ha)": "{:.2f}", "MAE": "{:.2f}"},
+                          na_rep="—")
+                  .map(_skill_ink, subset=["Skill vs null"]),
+        width="stretch", hide_index=True,
+    )
+
+if tax and clim_by_crop:
+    with st.expander("Crop phenology family × model architecture family",
+                     expanded=False):
+        st.caption(
+            "Cell value is mean skill against the null reference, not raw R².")
+        crop_fam = {c: v.get("phenology_family", "unknown")
+                    for c, v in tax.get("crops", {}).items()}
+        model_fam = {m: v.get("architecture_family", "unknown")
+                     for m, v in tax.get("models", {}).items()}
+        mc2 = mc.copy()
+        mc2["crop_family"] = mc2["crop"].map(crop_fam)
+        mc2["model_family"] = mc2["model"].map(model_fam)
+        fam_pivot = (mc2.dropna(subset=["skill"])
+                        .groupby(["crop_family", "model_family"])["skill"]
+                        .mean().unstack())
+        lim = float(np.nanmax(np.abs(fam_pivot.to_numpy()))) or 1.0
+        fam_fig = px.imshow(
+            fam_pivot, color_continuous_scale=SKILL_SCALE,
+            zmin=-lim, zmax=lim, aspect="auto", text_auto=".3f",
+            labels=dict(x="Model architecture family",
+                        y="Crop phenology family", color="Mean skill vs null"),
+        )
+        fam_fig.update_layout(height=420)
+        st.plotly_chart(fam_fig, width="stretch")
+        st.dataframe(fam_pivot.style.format("{:+.3f}", na_rep="—"),
+                     width="stretch")
+
+with st.expander("Provenance", expanded=False):
+    st.markdown(
+        "R² is measured in absolute dt/ha while the models predict a district "
+        "anomaly, so every model is handed its district's long-run mean for "
+        "free. The climatology reference is that free lunch alone — the "
+        "district baseline carried forward on its train-only trend, with the "
+        "weather-driven anomaly set to zero."
+    )
+    _summary_path = METRICS_DIR / "multicrop_summary.csv"
+    prov = []
+    for label, path in (("per-crop metrics", _summary_path),
+                        ("climatology reference", CLIMATOLOGY_CSV)):
+        prov.append({
+            "Artefact": label, "File": path.name,
+            "Written": (_dt.datetime.fromtimestamp(path.stat().st_mtime)
+                        .strftime("%Y-%m-%d %H:%M") if path.exists()
+                        else "missing"),
+        })
+    _ckpt_m = newest_checkpoint_mtime()
+    prov.append({
+        "Artefact": "newest model checkpoint", "File": "results/checkpoints/*.pt",
+        "Written": (_dt.datetime.fromtimestamp(_ckpt_m).strftime("%Y-%m-%d %H:%M")
+                    if _ckpt_m else "none"),
+    })
+    st.dataframe(pd.DataFrame(prov), hide_index=True, width="stretch")
+    if _stale:
+        st.warning(_stale)
+    else:
+        st.caption("No checkpoint is newer than the metrics above.")
+    st.caption(
+        "Sources: `results/metrics/multicrop_summary.csv` "
+        "(`python scripts/05b_eval_multicrop.py`) and "
+        "`results/metrics/climatology_baseline.csv` (recomputed on this page "
+        "whenever the processed dataset or a fitted pipeline is newer)."
+    )

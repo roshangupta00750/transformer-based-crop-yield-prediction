@@ -1,4 +1,10 @@
-"""Spatial view — one NUTS-3 map, seven overlays.
+"""Spatial view — where in Germany is the prediction good or bad?
+
+One question, one map. The overlay selector chooses what the single NUTS-3
+choropleth encodes; a four-metric KPI row summarises it. Ranked districts,
+the pooled variance-explained figure, the per-district-R² diagnostic, the
+leave-one-Landkreis-out study and the per-district yield history are all
+still here, one click away inside collapsed expanders.
 
 Merges the former `11_Spatial.py` (per-district skill + LOO XGBoost) and
 `18_Geographic.py` (actual / predicted / residual choropleth). Both pages
@@ -40,6 +46,7 @@ Data sources:
 from __future__ import annotations
 
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import folium
@@ -54,13 +61,13 @@ from streamlit_folium import st_folium
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _model_template import _predict_test_set
 from utils import (CHECKPOINTS_DIR, METRICS_DIR, MODELS, PROCESSED,
-                   PROJECT_ROOT, divider, kpi, landkreis_name_map, page_header)
+                   PROJECT_ROOT, kpi, landkreis_name_map,
+                   load_climatology_baseline, page_header)
 
 st.set_page_config(page_title="Spatial — Crop Yield", layout="wide")
 page_header(
     "Spatial view",
-    "Actual yield, model predictions, residuals and per-district error on the "
-    "German NUTS-3 panel.",
+    "Where in Germany is the prediction good or bad?",
 )
 
 # Colour used for districts that carry no yield series at all, and for those
@@ -241,9 +248,50 @@ with c4:
         year = st.select_slider("Year", opts, value=opts[-1], key="sp_year")
     else:
         year = None
-        st.select_slider("Year", ["test window 2024–2025"],
-                         value="test window 2024–2025", disabled=True,
+        _tw = f"test window {'–'.join(map(str, test_years))}"
+        st.select_slider("Year", [_tw], value=_tw, disabled=True,
                          key="sp_year_off")
+
+# --------------------------------------------------------------------------- #
+# Staleness — fires only for the overlays that actually read a metric CSV, so
+# the default "Actual yield" view (which reads the parquet, not the metrics)
+# stays clean. A firing warning is never collapsed.
+# --------------------------------------------------------------------------- #
+PER_DISTRICT_CSV = METRICS_DIR / "spatial_per_district.csv"
+LOO_CSV = METRICS_DIR / "loo_xgboost.csv"
+
+
+def _stale_against_checkpoints(*paths: Path) -> list[tuple[Path, float]]:
+    """Metric files older than the newest checkpoint on disk."""
+    ckpts = [*CHECKPOINTS_DIR.glob("*.pt"), *CHECKPOINTS_DIR.glob("*.ubj")]
+    if not ckpts:
+        return []
+    newest_mt = max(p.stat().st_mtime for p in ckpts)
+    return [(p, p.stat().st_mtime) for p in paths
+            if p.exists() and p.stat().st_mtime < newest_mt]
+
+
+_sources_used: list[Path] = []
+if overlay in NEEDS_METRICS:
+    _sources_used.append(PER_DISTRICT_CSV)
+if overlay in NEEDS_LOO:
+    _sources_used += [LOO_CSV, PER_DISTRICT_CSV]
+_stale_now = _stale_against_checkpoints(*dict.fromkeys(_sources_used))
+if _stale_now:
+    _ck = [*CHECKPOINTS_DIR.glob("*.pt"), *CHECKPOINTS_DIR.glob("*.ubj")]
+    _newest = max(_ck, key=lambda p: p.stat().st_mtime)
+    _nmt = _newest.stat().st_mtime
+    st.warning(
+        "**Stale — this overlay is not from the models currently on disk.** "
+        f"Newest checkpoint `{_newest.name}` is "
+        f"{datetime.fromtimestamp(_nmt):%Y-%m-%d %H:%M}:\n\n"
+        + "\n".join(
+            f"- `{p.name}` — {datetime.fromtimestamp(mt):%Y-%m-%d %H:%M}, "
+            f"{(_nmt - mt) / 86400:.1f} days older"
+            for p, mt in _stale_now)
+        + "\n\nRegenerate with `python scripts/06_spatial_eval.py` / "
+          "`python scripts/06b_loo_xgboost.py`."
+    )
 
 # --------------------------------------------------------------------------- #
 # Resolve the overlay to a per-district value column
@@ -409,7 +457,7 @@ m.get_root().html.add_child(folium.Element(f"""
 st_folium(m, width=None, height=600, returned_objects=[])
 
 # --------------------------------------------------------------------------- #
-# Headline numbers
+# PRIMARY 2 — headline numbers for whatever the map is showing
 # --------------------------------------------------------------------------- #
 if not values.empty:
     k1, k2, k3, k4 = st.columns(4)
@@ -424,29 +472,75 @@ if not values.empty:
         kpi("Panel coverage", f"{len(values)} / {len(panel_districts)}")
 
 # --------------------------------------------------------------------------- #
-# Pooled variance explained — the only R² this data supports
+# SECONDARY — ranked districts
+# --------------------------------------------------------------------------- #
+if not values.empty:
+    with st.expander("Ranked districts — best and worst 10", expanded=False):
+        tbl = joined.dropna(subset=["value"])[["name", "landkreis", "value"]].copy()
+        for c in ("rmse", "mae", "n", "y_true", "y_pred", "rmse_loo",
+                  "rmse_in_train"):
+            # Skip an extra that just restates the mapped value in another column.
+            if c in joined.columns and not joined[c].equals(joined["value"]):
+                tbl[c] = joined.loc[tbl.index, c]
+        vcol = label.split("—")[0].strip() or "Value"
+        tbl = tbl.rename(columns={"name": "District", "landkreis": "NUTS-3",
+                                  "value": vcol})
+        hi_label = "Largest" if not higher_is_worse else "Worst (largest error)"
+        lo_label = "Smallest" if not higher_is_worse else "Best (smallest error)"
+        t1, t2 = st.columns(2)
+        with t1:
+            st.markdown(f"##### {hi_label}")
+            st.dataframe(tbl.nlargest(10, vcol), hide_index=True, width="stretch")
+        with t2:
+            st.markdown(f"##### {lo_label}")
+            st.dataframe(tbl.nsmallest(10, vcol), hide_index=True, width="stretch")
+
+# --------------------------------------------------------------------------- #
+# SECONDARY — pooled variance explained, and why per-district R² is withheld
+#
+# Both live in one expander because Streamlit forbids nesting expanders and
+# the diagnostic is the justification for the pooled figure, not a separate
+# topic.
 # --------------------------------------------------------------------------- #
 if overlay in NEEDS_METRICS and not pd_df.empty and not panel.empty:
-    divider("Variance explained, pooled across districts")
-    pooled = _pooled_r2(model, crop, tuple(test_years))
-    if pooled is None:
-        st.info("Not enough aligned district-years to pool a variance-explained figure.")
-    else:
-        p1, p2, p3 = st.columns(3)
-        with p1:
-            kpi("Pooled R²", f"{pooled['r2']:.3f}")
-        with p2:
-            kpi("Pooled RMSE", f"{pooled['rmse']:,.2f} {unit}")
-        with p3:
-            kpi("Sample", f"n = {pooled['n_obs']} district-years")
-        st.caption(
-            f"1 − Σ nᵢ·RMSEᵢ² / Σ(y − ȳ)² over {pooled['n_districts']} districts "
-            f"× {len(test_years)} test years. Pooling is what makes the "
-            "denominator a real yield variance; the same quantity computed "
-            "district-by-district is undefined at n=2 (see diagnostic below)."
-        )
+    with st.expander("Skill diagnostics — pooled variance explained, and why "
+                     "per-district R² is withheld", expanded=False):
+        pooled = _pooled_r2(model, crop, tuple(test_years))
+        if pooled is None:
+            st.info("Not enough aligned district-years to pool a "
+                    "variance-explained figure.")
+        else:
+            _clim = load_climatology_baseline()
+            _clim_r2 = None
+            if not _clim.empty and "crop" in _clim.columns:
+                _row = _clim[_clim["crop"] == crop]
+                if not _row.empty:
+                    _clim_r2 = float(_row["r2"].iloc[0])
+            p1, p2, p3, p4 = st.columns(4)
+            with p1:
+                kpi("Pooled R²", f"{pooled['r2']:.3f}",
+                    delta=(f"{pooled['r2'] - _clim_r2:+.3f} vs climatology"
+                           if _clim_r2 is not None else None))
+            with p2:
+                kpi("Climatology baseline R²",
+                    f"{_clim_r2:.3f}" if _clim_r2 is not None else "—")
+            with p3:
+                kpi("Pooled RMSE", f"{pooled['rmse']:,.2f} {unit}")
+            with p4:
+                kpi("Sample", f"n = {pooled['n_obs']} district-years")
+            st.caption(
+                f"1 − Σ nᵢ·RMSEᵢ² / Σ(y − ȳ)² over {pooled['n_districts']} "
+                f"districts × {len(test_years)} test years. Pooling is what "
+                "makes the denominator a real yield variance; the same "
+                "quantity computed district-by-district is undefined at n=2 "
+                "(see below). The climatology column is the learn-nothing "
+                "reference from `results/metrics/climatology_baseline.csv` — "
+                "it emits each district's train-fitted baseline and no "
+                "anomaly."
+            )
 
-    with st.expander("Why per-district R² is withheld", expanded=False):
+        st.markdown("---")
+        st.markdown("##### Why per-district R² is withheld")
         s = pd_df[(pd_df["model"] == model) & (pd_df["crop"] == crop)].copy()
         if s.empty or "r2" not in s.columns:
             st.write("No per-district rows for this selection.")
@@ -487,128 +581,124 @@ if overlay in NEEDS_METRICS and not pd_df.empty and not panel.empty:
             )
 
 # --------------------------------------------------------------------------- #
-# Ranked districts
-# --------------------------------------------------------------------------- #
-if not values.empty:
-    divider("Ranked districts")
-    tbl = joined.dropna(subset=["value"])[["name", "landkreis", "value"]].copy()
-    for c in ("rmse", "mae", "n", "y_true", "y_pred", "rmse_loo", "rmse_in_train"):
-        # Skip an extra that just restates the mapped value in another column.
-        if c in joined.columns and not joined[c].equals(joined["value"]):
-            tbl[c] = joined.loc[tbl.index, c]
-    vcol = label.split("—")[0].strip() or "Value"
-    tbl = tbl.rename(columns={"name": "District", "landkreis": "NUTS-3",
-                              "value": vcol})
-    hi_label = "Largest" if not higher_is_worse else "Worst (largest error)"
-    lo_label = "Smallest" if not higher_is_worse else "Best (smallest error)"
-    t1, t2 = st.columns(2)
-    with t1:
-        st.markdown(f"##### {hi_label}")
-        st.dataframe(tbl.nlargest(10, vcol), hide_index=True, width="stretch")
-    with t2:
-        st.markdown(f"##### {lo_label}")
-        st.dataframe(tbl.nsmallest(10, vcol), hide_index=True, width="stretch")
-
-# --------------------------------------------------------------------------- #
-# LOO detail
+# SECONDARY — leave-one-Landkreis-out detail
 # --------------------------------------------------------------------------- #
 if overlay in NEEDS_LOO:
-    divider("Leave-one-Landkreis-out — XGBoost")
-    if loo_df.empty:
-        st.info("`results/metrics/loo_xgboost.csv` not generated. Run "
-                "`python scripts/06b_loo_xgboost.py`.")
-    else:
-        lsub = loo_df[loo_df["crop"] == crop]
-        n_below = int((lsub["n"] < 3).sum())
-        if n_below:
-            st.warning(
-                f"{n_below} of {len(lsub)} folds on disk hold fewer than 3 test "
-                "observations — below the n>=3 guard now enforced in "
-                "`scripts/06b_loo_xgboost.py`. This CSV predates that guard, so "
-                "fold-level figures are indicative only. Regenerate before "
-                "quoting them."
+    with st.expander("Leave-one-Landkreis-out — XGBoost", expanded=False):
+        if loo_df.empty:
+            st.info("`results/metrics/loo_xgboost.csv` not generated. Run "
+                    "`python scripts/06b_loo_xgboost.py`.")
+        else:
+            lsub = loo_df[loo_df["crop"] == crop]
+            n_below = int((lsub["n"] < 3).sum())
+            if n_below:
+                st.warning(
+                    f"{n_below} of {len(lsub)} folds on disk hold fewer than 3 "
+                    "test observations — below the n>=3 guard now enforced in "
+                    "`scripts/06b_loo_xgboost.py`. This CSV predates that guard, "
+                    "so fold-level figures are indicative only. Regenerate before "
+                    "quoting them."
+                )
+            st.caption(
+                "Each fold is a separate XGBoost fit with the named district "
+                "removed from the 2003–2022 training set, so any RMSE increase is "
+                "attributable to the model never having seen that district. The "
+                "other five models would need GPU compute beyond the Praktikum "
+                "budget."
             )
-        st.caption(
-            "Each fold is a separate XGBoost fit with the named district removed "
-            "from the 2003–2022 training set, so any RMSE increase is attributable "
-            "to the model never having seen that district. The other five models "
-            "would need GPU compute beyond the Praktikum budget."
-        )
-        base = pd_df[(pd_df["model"] == "xgboost") & (pd_df["crop"] == crop)] \
-            if not pd_df.empty else pd.DataFrame()
-        mg = lsub[["landkreis", "rmse"]].rename(columns={"rmse": "rmse_loo"})
-        if not base.empty:
-            mg = mg.merge(base[["landkreis", "rmse"]].rename(
-                columns={"rmse": "rmse_in_train"}), on="landkreis", how="inner")
+            base = pd_df[(pd_df["model"] == "xgboost") & (pd_df["crop"] == crop)] \
+                if not pd_df.empty else pd.DataFrame()
+            mg = lsub[["landkreis", "rmse"]].rename(columns={"rmse": "rmse_loo"})
+            if not base.empty:
+                mg = mg.merge(base[["landkreis", "rmse"]].rename(
+                    columns={"rmse": "rmse_in_train"}), on="landkreis",
+                    how="inner")
 
-        g1, g2, g3 = st.columns(3)
-        with g1:
-            kpi("Folds", f"{len(lsub)}")
-        with g2:
-            kpi("Median LOO RMSE", f"{lsub['rmse'].median():,.2f} {unit}")
-        with g3:
-            if "rmse_in_train" in mg.columns and not mg.empty:
-                delta = float((mg["rmse_loo"] - mg["rmse_in_train"]).median())
-                kpi("Median RMSE penalty", f"{delta:+,.2f} {unit}",
-                    delta="positive = spatial generalization gap"
-                    if delta > 0 else None)
-            else:
-                kpi("Median RMSE penalty", "—")
+            g1, g2, g3 = st.columns(3)
+            with g1:
+                kpi("Folds", f"{len(lsub)}")
+            with g2:
+                kpi("Median LOO RMSE", f"{lsub['rmse'].median():,.2f} {unit}")
+            with g3:
+                if "rmse_in_train" in mg.columns and not mg.empty:
+                    delta = float((mg["rmse_loo"] - mg["rmse_in_train"]).median())
+                    kpi("Median RMSE penalty", f"{delta:+,.2f} {unit}",
+                        delta="positive = spatial generalization gap"
+                        if delta > 0 else None)
+                else:
+                    kpi("Median RMSE penalty", "—")
 
-        fig = px.histogram(lsub, x="rmse", nbins=20,
-                           labels={"rmse": f"LOO RMSE ({unit})"},
-                           title=f"LOO RMSE across {len(lsub)} folds — {crop}")
-        fig.update_layout(height=300)
-        st.plotly_chart(fig, width="stretch")
-
-        if "rmse_in_train" in mg.columns and not mg.empty:
-            fig = px.scatter(
-                mg, x="rmse_in_train", y="rmse_loo", hover_data=["landkreis"],
-                labels={"rmse_in_train": f"RMSE, district in training ({unit})",
-                        "rmse_loo": f"RMSE, district held out ({unit})"},
-                title="Same district, in training vs held out")
-            hi = float(max(mg["rmse_in_train"].max(), mg["rmse_loo"].max()))
-            fig.add_shape(type="line", x0=0, y0=0, x1=hi, y1=hi,
-                          line=dict(color="grey", dash="dash"))
-            fig.update_layout(height=360)
+            fig = px.histogram(lsub, x="rmse", nbins=20,
+                               labels={"rmse": f"LOO RMSE ({unit})"},
+                               title=f"LOO RMSE across {len(lsub)} folds — {crop}")
+            fig.update_layout(height=300)
             st.plotly_chart(fig, width="stretch")
-            st.caption("Points above the diagonal cost accuracy when the district "
-                       "was withheld.")
+
+            if "rmse_in_train" in mg.columns and not mg.empty:
+                fig = px.scatter(
+                    mg, x="rmse_in_train", y="rmse_loo", hover_data=["landkreis"],
+                    labels={"rmse_in_train": f"RMSE, district in training ({unit})",
+                            "rmse_loo": f"RMSE, district held out ({unit})"},
+                    title="Same district, in training vs held out")
+                hi = float(max(mg["rmse_in_train"].max(), mg["rmse_loo"].max()))
+                fig.add_shape(type="line", x0=0, y0=0, x1=hi, y1=hi,
+                              line=dict(color="grey", dash="dash"))
+                fig.update_layout(height=360)
+                st.plotly_chart(fig, width="stretch")
+                st.caption("Points above the diagonal cost accuracy when the "
+                           "district was withheld.")
 
 # --------------------------------------------------------------------------- #
-# Per-district history
+# SECONDARY — per-district yield history (its selector drives nothing else)
 # --------------------------------------------------------------------------- #
-divider("Per-district yield history")
-codes = sorted(panel_districts)
-if codes:
-    dist = st.selectbox("Landkreis", codes,
-                        format_func=lambda c: f"{name_map.get(c, c)} ({c})",
-                        key="sp_dist")
-    trend = (panel[(panel["crop"] == crop) & (panel["landkreis"] == dist)]
-             .sort_values("year"))
-    if trend.empty:
-        st.info(f"No {crop} series for {name_map.get(dist, dist)}.")
+with st.expander("Per-district yield history", expanded=False):
+    codes = sorted(panel_districts)
+    if not codes:
+        st.info("No districts in the panel.")
     else:
-        fig = px.line(trend, x="year", y="yield_dt_per_ha", markers=True,
-                      labels={"yield_dt_per_ha": f"Yield ({unit})", "year": "Year"},
-                      title=f"{name_map.get(dist, dist)} ({dist}) — {crop}")
-        fig.add_hline(y=float(trend["yield_dt_per_ha"].mean()), line_dash="dash",
-                      line_color="grey",
-                      annotation_text=f"mean {trend['yield_dt_per_ha'].mean():.1f}")
-        for ty in test_years:
-            if ty in set(trend["year"]):
-                fig.add_vrect(x0=ty - 0.5, x1=ty + 0.5, fillcolor="#888",
-                              opacity=0.12, line_width=0)
-        fig.update_layout(height=340)
-        st.plotly_chart(fig, width="stretch")
-        st.caption(f"Shaded band: test years {', '.join(map(str, test_years))}.")
+        dist = st.selectbox("Landkreis", codes,
+                            format_func=lambda c: f"{name_map.get(c, c)} ({c})",
+                            key="sp_dist")
+        trend = (panel[(panel["crop"] == crop) & (panel["landkreis"] == dist)]
+                 .sort_values("year"))
+        if trend.empty:
+            st.info(f"No {crop} series for {name_map.get(dist, dist)}.")
+        else:
+            fig = px.line(trend, x="year", y="yield_dt_per_ha", markers=True,
+                          labels={"yield_dt_per_ha": f"Yield ({unit})",
+                                  "year": "Year"},
+                          title=f"{name_map.get(dist, dist)} ({dist}) — {crop}")
+            fig.add_hline(y=float(trend["yield_dt_per_ha"].mean()),
+                          line_dash="dash", line_color="grey",
+                          annotation_text=f"mean {trend['yield_dt_per_ha'].mean():.1f}")
+            for ty in test_years:
+                if ty in set(trend["year"]):
+                    fig.add_vrect(x0=ty - 0.5, x1=ty + 0.5, fillcolor="#888",
+                                  opacity=0.12, line_width=0)
+            fig.update_layout(height=340)
+            st.plotly_chart(fig, width="stretch")
+            st.caption(f"Shaded band: test years "
+                       f"{', '.join(map(str, test_years))}.")
 
-st.markdown("---")
-st.caption(
-    f"Panel: {len(panel_districts)} NUTS-3 districts with yield series "
-    f"({len(polys)} German polygons exist; the remainder are historical Kreis "
-    "boundaries that do not map to 2021 NUTS geography). "
-    "Sources: `data/processed/dataset.parquet`, "
-    "`results/metrics/spatial_per_district.csv` (`scripts/06_spatial_eval.py`), "
-    "`results/metrics/loo_xgboost.csv` (`scripts/06b_loo_xgboost.py`)."
-)
+# --------------------------------------------------------------------------- #
+# SECONDARY — provenance
+# --------------------------------------------------------------------------- #
+with st.expander("Provenance — panel, sources and file dates", expanded=False):
+    _prov = []
+    for _p in (PROCESSED, PER_DISTRICT_CSV, LOO_CSV):
+        _prov.append({
+            "Artefact": str(_p.relative_to(PROJECT_ROOT))
+            if _p.is_relative_to(PROJECT_ROOT) else _p.name,
+            "Last written": (datetime.fromtimestamp(_p.stat().st_mtime)
+                             .strftime("%Y-%m-%d %H:%M")
+                             if _p.exists() else "missing"),
+        })
+    st.dataframe(pd.DataFrame(_prov), hide_index=True, width="stretch")
+    st.caption(
+        f"Panel: {len(panel_districts)} NUTS-3 districts with yield series "
+        f"({len(polys)} German polygons exist; the remainder are historical "
+        "Kreis boundaries that do not map to 2021 NUTS geography). "
+        "Generated by `scripts/06_spatial_eval.py` and "
+        "`scripts/06b_loo_xgboost.py`; the test split is read from "
+        f"`configs/data.yaml` ({', '.join(map(str, test_years))})."
+    )

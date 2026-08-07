@@ -1,5 +1,13 @@
 """Data — the multivariate panel, audited live.
 
+The page answers one question: what is in this dataset? Three elements are
+visible by default — the panel in five numbers, the district x year coverage
+grid, and the multivariate series viewer. Everything else built for this page
+survives untouched inside three collapsed expanders (coverage detail, feature
+inventory and column audit, sources and provenance). Where a collapsed section
+contains a live defect, the count rides in the expander label so that folding
+it away does not conceal it.
+
 Every number rendered here is computed at request time from
 ``data/processed/dataset.parquet``, ``configs/data.yaml``,
 ``src/data/dataset.py`` or the per-source interim parquets. Nothing is
@@ -362,13 +370,21 @@ def satellite_cadence(_sig: tuple) -> tuple[int, int] | None:
     return int(np.median(gaps)), int(len(dates))
 
 
+
+
 # --------------------------------------------------------------------------- #
-# Page
+# Page — one question: what is in this dataset?
+#
+# Three primary elements are visible by default: the panel in five numbers,
+# one coverage picture, and the multivariate series viewer. Every other audit
+# built for this page is preserved verbatim, one click away, inside three
+# collapsed expanders whose labels carry the live counts so that nothing
+# alarming is hidden behind a neutral word.
 # --------------------------------------------------------------------------- #
 page_header(
     "Data",
-    "The multivariate panel behind every model on this dashboard — profiled "
-    "from the parquet and the feature policy at page load.")
+    "What is in this dataset. Every number is profiled from the parquet, the "
+    "feature policy and the interim sources at page load.")
 
 if not PROCESSED.exists():
     st.warning("`data/processed/dataset.parquet` not found. Run "
@@ -386,42 +402,254 @@ min_cov = float((cfg.get("quality") or {}).get("min_sequence_coverage", 0.90))
 kept = panel[panel["coverage"] >= min_cov]
 n_districts = panel["landkreis"].nunique()
 n_years = panel["year"].nunique()
+NAME_MAP = landkreis_name_map()
 
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-with c1: kpi("Rows", f"{profile['rows']:,}")
-with c2: kpi("Columns", profile["n_columns"])
-with c3: kpi("Districts (NUTS-3)", n_districts)
-with c4: kpi("Crops", panel["crop"].nunique())
-with c5: kpi("Years", f"{int(panel['year'].min())}–{int(panel['year'].max())}")
-with c6: kpi("Crop-year sequences", f"{len(kept):,}",
-             delta=f"-{len(panel) - len(kept):,} below coverage floor")
+SOURCE_SIGS = tuple(sig(p) for p in
+                    [CENTROIDS, INTERIM / "yield.parquet",
+                     INTERIM / "weather.parquet", INTERIM / "satellite.parquet",
+                     INTERIM / "soil.parquet", PROCESSED])
 
 v_code = code_policy_version(sig(DATASET_PY))
 v_data = data_policy_version(sig(POLICY_SIDECAR))
-if v_code is not None and v_data is not None and v_code != v_data:
+policy_mismatch = (v_code is not None and v_data is not None and v_code != v_data)
+
+
+# --------------------------------------------------------------------------- #
+# PRIMARY 1 — the panel in five numbers
+# --------------------------------------------------------------------------- #
+c1, c2, c3, c4, c5 = st.columns(5)
+with c1: kpi("Rows", f"{profile['rows']:,}")
+with c2: kpi("Districts (NUTS-3)", n_districts)
+with c3: kpi("Crops", panel["crop"].nunique())
+with c4: kpi("Years", f"{int(panel['year'].min())}–{int(panel['year'].max())}")
+with c5: kpi("Crop-year sequences", f"{len(kept):,}",
+             delta=f"-{len(panel) - len(kept):,} below coverage floor")
+
+# A firing policy mismatch is never collapsed: it invalidates everything below
+# it. When code and parquet agree, the version detail lives in Provenance.
+if policy_mismatch:
     st.error(f"Feature-policy mismatch: `src/data/dataset.py` declares v{v_code} "
              f"but `dataset.policy.json` says the parquet was built under "
              f"v{v_data}. Rebuild before trusting anything below.")
+
+
+# --------------------------------------------------------------------------- #
+# PRIMARY 2 — one coverage picture: which district-years exist at all
+# --------------------------------------------------------------------------- #
+st.markdown("#### District x year coverage")
+grid_col1, grid_col2, grid_col3 = st.columns([2, 2, 2])
+crop_opts = ["All crops (count)"] + sorted(panel["crop"].unique())
+with grid_col1:
+    grid_crop = st.selectbox("Cell value", crop_opts, key="grid_crop")
+with grid_col2:
+    apply_floor = st.checkbox(
+        f"Only sequences passing the {min_cov:.0%} coverage floor",
+        value=True, key="grid_floor")
+with grid_col3:
+    show_all_nuts = st.checkbox(
+        "Include NUTS-3 districts absent from the panel",
+        value=False, key="grid_allnuts")
+
+src = kept if apply_floor else panel
+if grid_crop == "All crops (count)":
+    cell = (src.groupby(["landkreis", "year"], observed=True)["crop"]
+            .nunique().rename("value").reset_index())
+    cbar = "Crops present"
 else:
-    st.caption(f"Feature policy v{v_data if v_data is not None else '?'} "
-               f"(code v{v_code if v_code is not None else '?'}) · "
-               f"parquet {profile['size_mb']:.0f} MB in "
-               f"{profile['row_groups']} row groups · "
-               f"coverage floor {min_cov:.0%} of the configured growing season")
+    cs = src[src["crop"] == grid_crop]
+    cell = (cs.groupby(["landkreis", "year"], observed=True)["crop"]
+            .size().rename("value").reset_index())
+    cbar = f"{grid_crop} present"
 
-tab_panel, tab_features, tab_series, tab_sources = st.tabs(
-    ["Panel coverage", "Feature inventory", "Time-series viewer", "Sources"])
+grid = cell.pivot(index="landkreis", columns="year", values="value")
+if show_all_nuts:
+    all_nuts = source_districts(SOURCE_SIGS).get("NUTS-3 geography")
+    if all_nuts:
+        grid = grid.reindex(sorted(all_nuts))
+grid = grid.sort_index()
+labels = [f"{NAME_MAP.get(k, '')} ({k})".strip() for k in grid.index]
+
+total_cells = grid.shape[0] * grid.shape[1]
+filled = int(grid.notna().sum().sum())
+
+heat = go.Figure(go.Heatmap(
+    z=grid.to_numpy(), x=[str(y) for y in grid.columns], y=labels,
+    colorscale="Blues", colorbar=dict(title=cbar),
+    hovertemplate="%{y}<br>%{x}<br>" + cbar + ": %{z}<extra></extra>",
+    hoverongaps=False))
+heat.update_layout(height=min(760, max(420, 13 * len(grid))),
+                   xaxis_title="", yaxis_title="",
+                   margin=dict(l=0, r=0, t=10, b=0))
+# Below ~60 rows the district names are legible; above it they collide, so the
+# axis is dropped and the name is served on hover instead of drawn illegibly.
+heat.update_yaxes(showticklabels=len(grid) <= 60, tickfont=dict(size=8))
+st.plotly_chart(heat, width="stretch")
+st.caption(
+    f"{filled:,} of {total_cells:,} district-year cells are populated "
+    f"({100 * filled / total_cells if total_cells else 0:.1f}%). "
+    f"Blank cells are real gaps — no "
+    f"sequence exists for that district-year; the panel is unbalanced. Values "
+    f"are counted from the panel index, not assumed. Hover a cell for the "
+    f"district name.")
 
 
 # --------------------------------------------------------------------------- #
-# Tab 1 — panel coverage
+# PRIMARY 3 — the multivariate time-series viewer
 # --------------------------------------------------------------------------- #
-with tab_panel:
-    st.markdown("#### Where districts are lost")
-    sigs = tuple(sig(p) for p in
-                 [CENTROIDS, INTERIM / "yield.parquet", INTERIM / "weather.parquet",
-                  INTERIM / "satellite.parquet", INTERIM / "soil.parquet", PROCESSED])
-    stages = source_districts(sigs)
+st.markdown("#### Inspect one crop-year sequence")
+districts = sorted(panel["landkreis"].unique())
+labelled = {landkreis: f"{NAME_MAP.get(landkreis, '')} ({landkreis})".strip()
+            for landkreis in districts}
+
+s1, s2, s3 = st.columns([3, 2, 3])
+with s1:
+    district = st.selectbox("District", districts,
+                            format_func=lambda k: labelled[k],
+                            key="ts_district")
+d_panel = panel[panel["landkreis"] == district]
+with s2:
+    crop = st.selectbox("Crop", sorted(d_panel["crop"].unique()), key="ts_crop")
+dc_panel = d_panel[d_panel["crop"] == crop].sort_values("year")
+avail_years = [int(y) for y in dc_panel["year"]]
+with s3:
+    years = st.multiselect(
+        "Year(s)", avail_years,
+        default=avail_years[-1:] if avail_years else [],
+        max_selections=len(SERIES_COLORS), key="ts_years")
+
+numeric_channels = [c for c in profile["numeric"]
+                    if c not in KEY_COLUMNS and c != "landkreis_id"]
+default_channels = [c for c in ["temperature_air_max_2m",
+                                "precipitation_height", "ndvi", "lai"]
+                    if c in numeric_channels]
+ch1, ch2, ch3 = st.columns([4, 2, 2])
+with ch1:
+    channels = st.multiselect("Channels", numeric_channels,
+                              default=default_channels, max_selections=8,
+                              key="ts_channels")
+with ch2:
+    mode = st.radio("Layout", ["Stacked (raw units)", "Overlaid (z-scored)"],
+                    key="ts_mode", horizontal=False)
+with ch3:
+    show_rows = st.checkbox("Show the rows behind this plot", value=False,
+                            key="ts_rows")
+
+seq = pd.DataFrame()
+if not years:
+    st.info("Pick at least one year. This district-crop pair exists in "
+            f"{len(avail_years)} of {n_years} years.")
+elif not channels:
+    st.info("Pick at least one channel.")
+else:
+    seq = sequence_slice(PQ_SIG, district, crop, tuple(sorted(years)),
+                         tuple(channels + [c for c in
+                                           ("ndvi_observed",) if c in
+                                           numeric_channels]))
+    if seq.empty:
+        st.warning("No rows returned for that combination.")
+    else:
+        phen = (cfg.get("phenology") or {}).get(crop, {})
+        sow, harv = phen.get("sowing_doy"), phen.get("harvest_doy")
+        win_lo = 1 if (sow is not None and harv is not None and sow > harv) else sow
+        meta = dc_panel[dc_panel["year"].isin(years)]
+
+        if mode.startswith("Stacked"):
+            fig = make_subplots(rows=len(channels), cols=1,
+                                shared_xaxes=True, vertical_spacing=0.03,
+                                subplot_titles=channels)
+            for r, ch in enumerate(channels, start=1):
+                for i, y in enumerate(sorted(years)):
+                    sub = seq[seq["year"] == y]
+                    fig.add_trace(go.Scatter(
+                        x=sub["doy"], y=sub[ch], mode="lines", name=str(y),
+                        legendgroup=str(y), showlegend=(r == 1),
+                        line=dict(width=2,
+                                  color=SERIES_COLORS[i % len(SERIES_COLORS)]),
+                        hovertemplate=(f"{ch}<br>DOY %{{x}}<br>"
+                                       f"%{{y:.4g}}<extra>{y}</extra>")),
+                        row=r, col=1)
+                if harv is not None:
+                    fig.add_vline(x=harv, line_dash="dot", line_width=1,
+                                  line_color="#888888", row=r, col=1)
+            fig.update_layout(height=max(300, 170 * len(channels)),
+                              hovermode="x unified",
+                              margin=dict(l=0, r=0, t=30, b=0),
+                              legend_title_text="Year")
+            fig.update_xaxes(title_text="day of year", row=len(channels), col=1)
+            for ann in fig.layout.annotations:
+                ann.font.size = 12
+            st.plotly_chart(fig, width="stretch")
+        else:
+            z = seq.copy()
+            for ch in channels:
+                sd = z[ch].std()
+                z[ch] = (z[ch] - z[ch].mean()) / (sd if sd else 1.0)
+            fig = go.Figure()
+            for i, ch in enumerate(channels):
+                for y in sorted(years):
+                    sub = z[z["year"] == y]
+                    fig.add_trace(go.Scatter(
+                        x=sub["doy"], y=sub[ch], mode="lines",
+                        name=f"{ch} · {y}" if len(years) > 1 else ch,
+                        line=dict(width=2,
+                                  color=SERIES_COLORS[i % len(SERIES_COLORS)],
+                                  dash="solid" if y == min(years) else "dot"),
+                        hovertemplate="DOY %{x}<br>z %{y:.2f}<extra></extra>"))
+            if harv is not None:
+                fig.add_vline(x=harv, line_dash="dot", line_width=1,
+                              line_color="#888888",
+                              annotation_text="harvest DOY")
+            fig.update_layout(height=460, hovermode="x unified",
+                              xaxis_title="day of year",
+                              yaxis_title="z-score (within this slice)",
+                              margin=dict(l=0, r=0, t=10, b=0))
+            st.plotly_chart(fig, width="stretch")
+
+        # One context line instead of a second KPI row: the facts a reader
+        # needs to interpret the traces above, including the carry-forward
+        # caveat that explains their step structure.
+        bits = [f"{len(seq):,} rows"]
+        if harv is not None:
+            bits.append(f"season window DOY {win_lo}–{harv}")
+        bits.append("yield " + " / ".join(
+            f"{v:.1f}" for v in meta["yield_dt_per_ha"]) + " dt/ha")
+        bits.append("season coverage " + " / ".join(
+            f"{v:.0%}" for v in meta["coverage"]))
+        note = " · ".join(bits) + "."
+        if "ndvi_observed" in seq.columns:
+            note += (f" {float(seq['ndvi_observed'].mean()):.1%} of days carry a "
+                     f"genuine satellite observation; the rest are carried "
+                     f"forward from the last composite, and the step structure "
+                     f"in the NDVI/EVI/LAI traces is that carry-forward, not a "
+                     f"smooth signal.")
+        if not mode.startswith("Stacked"):
+            note += (" Z-scoring is per channel within this slice only — it "
+                     "makes shapes comparable, not magnitudes; raw units live "
+                     "in the stacked layout.")
+        st.caption(note)
+
+        if show_rows:
+            st.dataframe(seq, width="stretch", hide_index=True)
+            st.download_button(
+                "Download this slice as CSV",
+                seq.to_csv(index=False).encode(),
+                file_name=f"{district}_{crop}_"
+                          f"{'-'.join(str(y) for y in sorted(years))}.csv",
+                mime="text/csv")
+
+st.markdown("---")
+
+
+# --------------------------------------------------------------------------- #
+# SECONDARY 1 — coverage detail: how the panel got to its final size
+# --------------------------------------------------------------------------- #
+with st.expander(
+        f"Coverage detail — district funnel, season completeness, "
+        f"{len(panel) - len(kept):,} sequences dropped at the "
+        f"{min_cov:.0%} floor", expanded=False):
+
+    st.markdown("**Where districts are lost**")
+    stages = source_districts(SOURCE_SIGS)
     if stages:
         stage_df = pd.DataFrame(
             [{"Stage": k, "Districts": len(v)} for k, v in stages.items()])
@@ -455,61 +683,7 @@ with tab_panel:
                 f"{len(stages.get('Satellite', geo))} polygons.")
 
     st.markdown("---")
-    st.markdown("#### District x year coverage")
-    grid_col1, grid_col2, grid_col3 = st.columns([2, 2, 2])
-    crop_opts = ["All crops (count)"] + sorted(panel["crop"].unique())
-    with grid_col1:
-        grid_crop = st.selectbox("Cell value", crop_opts, key="grid_crop")
-    with grid_col2:
-        apply_floor = st.checkbox(
-            f"Only sequences passing the {min_cov:.0%} coverage floor",
-            value=True, key="grid_floor")
-    with grid_col3:
-        show_all_nuts = st.checkbox(
-            "Include NUTS-3 districts absent from the panel",
-            value=False, key="grid_allnuts")
-
-    src = kept if apply_floor else panel
-    if grid_crop == "All crops (count)":
-        cell = (src.groupby(["landkreis", "year"], observed=True)["crop"]
-                .nunique().rename("value").reset_index())
-        cbar = "Crops present"
-    else:
-        cs = src[src["crop"] == grid_crop]
-        cell = (cs.groupby(["landkreis", "year"], observed=True)["crop"]
-                .size().rename("value").reset_index())
-        cbar = f"{grid_crop} present"
-
-    grid = cell.pivot(index="landkreis", columns="year", values="value")
-    if show_all_nuts and stages.get("NUTS-3 geography"):
-        grid = grid.reindex(sorted(stages["NUTS-3 geography"]))
-    grid = grid.sort_index()
-    names = landkreis_name_map()
-    labels = [f"{names.get(k, '')} ({k})".strip() for k in grid.index]
-
-    total_cells = grid.shape[0] * grid.shape[1]
-    filled = int(grid.notna().sum().sum())
-    g1, g2, g3 = st.columns(3)
-    with g1: kpi("Grid cells", f"{total_cells:,}")
-    with g2: kpi("Populated", f"{filled:,}", delta=f"{100*filled/total_cells:.1f}%")
-    with g3: kpi("Empty", f"{total_cells - filled:,}")
-
-    heat = go.Figure(go.Heatmap(
-        z=grid.to_numpy(), x=[str(y) for y in grid.columns], y=labels,
-        colorscale="Blues", colorbar=dict(title=cbar),
-        hovertemplate="%{y}<br>%{x}<br>" + cbar + ": %{z}<extra></extra>",
-        hoverongaps=False))
-    heat.update_layout(height=min(2200, max(420, 13 * len(grid))),
-                       xaxis_title="", yaxis_title="",
-                       margin=dict(l=0, r=0, t=10, b=0))
-    heat.update_yaxes(tickfont=dict(size=8))
-    st.plotly_chart(heat, width="stretch")
-    st.caption("Blank cells are real gaps — no sequence exists for that "
-               "district-year. Grid values are counted from the panel index, "
-               "not assumed.")
-
-    st.markdown("---")
-    st.markdown("#### Growing-season completeness")
+    st.markdown("**Growing-season completeness**")
     left, right = st.columns([3, 2])
     with left:
         hist = px.histogram(panel, x="coverage", nbins=60,
@@ -537,7 +711,7 @@ with tab_panel:
             width="stretch", hide_index=True)
 
     st.markdown("---")
-    st.markdown("#### Sequences per year")
+    st.markdown("**Sequences per year**")
     per_year = (kept.groupby("year")
                 .agg(districts=("landkreis", "nunique"),
                      sequences=("crop", "size")).reset_index())
@@ -553,37 +727,62 @@ with tab_panel:
                      margin=dict(t=10, b=0))
     st.plotly_chart(fy, width="stretch")
 
+    st.markdown("---")
+    st.markdown(f"**Yield label history — "
+                f"{labelled.get(district, str(district))}**")
+    hist_rows = panel[panel["landkreis"] == district].sort_values(["crop", "year"])
+    if not hist_rows.empty:
+        yfig = px.line(hist_rows, x="year", y="yield_dt_per_ha", color="crop",
+                       markers=True, color_discrete_sequence=SERIES_COLORS)
+        yfig.update_traces(line=dict(width=2), marker=dict(size=6))
+        yfig.update_layout(height=360, xaxis_title="",
+                           yaxis_title="Yield (dt/ha)",
+                           legend_title_text="", margin=dict(t=10, b=0))
+        st.plotly_chart(yfig, width="stretch")
+        st.caption("Follows the district picked in the viewer above. Gaps are "
+                   "missing reporting years, not zeros — the panel is "
+                   "unbalanced and the line is broken where no label exists.")
+
 
 # --------------------------------------------------------------------------- #
-# Tab 2 — feature inventory + policy as data
+# SECONDARY 2 — feature inventory, the duplicate audit, and the policy
 # --------------------------------------------------------------------------- #
-with tab_features:
-    role_of: dict[str, str] = {}
-    for role in ("past_observed", "static", "known_future", "excluded"):
-        for name in features_cfg.get(role) or []:
-            role_of[name] = role
+role_of: dict[str, str] = {}
+for role in ("past_observed", "static", "known_future", "excluded"):
+    for name in features_cfg.get(role) or []:
+        role_of[name] = role
 
-    feature_roles = ("past_observed", "static", "known_future")
-    feature_order = {name: i for i, name in enumerate(
-        n for role in feature_roles for n in (features_cfg.get(role) or []))}
+feature_roles = ("past_observed", "static", "known_future")
+feature_order = {name: i for i, name in enumerate(
+    n for role in feature_roles for n in (features_cfg.get(role) or []))}
 
-    def _rank(col: str) -> tuple:
-        """Declared features lead their equivalence class, in config order.
 
-        Which member is called the original decides which members are called
-        redundant, so the representative must be the column a model actually
-        reads — otherwise `soil_imputed` would be reported as a duplicate of
-        `sand_imputed`, which no model ever sees.
-        """
-        return (col not in feature_order, feature_order.get(col, 0), col)
+def _rank(col: str) -> tuple:
+    """Declared features lead their equivalence class, in config order.
 
-    dup_classes = [sorted(cls, key=_rank)
-                   for cls in duplicate_classes(PQ_SIG, tuple(profile["numeric"]))]
-    dup_of: dict[str, str] = {}
-    for cls in dup_classes:
-        for member in cls[1:]:
-            dup_of[member] = cls[0]
+    Which member is called the original decides which members are called
+    redundant, so the representative must be the column a model actually
+    reads — otherwise `soil_imputed` would be reported as a duplicate of
+    `sand_imputed`, which no model ever sees.
+    """
+    return (col not in feature_order, feature_order.get(col, 0), col)
 
+
+dup_classes = [sorted(cls, key=_rank)
+               for cls in duplicate_classes(PQ_SIG, tuple(profile["numeric"]))]
+dup_of: dict[str, str] = {}
+for cls in dup_classes:
+    for member in cls[1:]:
+        dup_of[member] = cls[0]
+
+# The duplicate count rides in the expander label so a known defect is never
+# hidden behind a neutral word.
+inv_label = (f"Feature inventory and column audit — {profile['n_columns']} "
+             f"columns")
+if dup_of:
+    inv_label += f", {len(dup_of)} byte-identical duplicates"
+
+with st.expander(inv_label, expanded=False):
     moments = column_moments(PQ_SIG, tuple(profile["numeric"]))
     moment_map = moments.set_index("column").to_dict("index")
 
@@ -638,7 +837,8 @@ with tab_features:
         } for cls in dup_classes])
         st.dataframe(dup_table, width="stretch", hide_index=True)
 
-    st.markdown("#### Per-column profile")
+    st.markdown("---")
+    st.markdown("**Per-column profile**")
     f1, f2 = st.columns([2, 3])
     with f1:
         role_pick = st.multiselect(
@@ -662,7 +862,7 @@ with tab_features:
                "Mean, Std and Distinct are streamed one column at a time.")
 
     st.markdown("---")
-    st.markdown("#### Feature policy")
+    st.markdown("**Feature policy**")
     reasons = read_list_comments(CFG_SIG, "excluded")
     excluded = features_cfg.get("excluded") or []
     if excluded:
@@ -719,9 +919,8 @@ with tab_features:
             st.success("Every parquet column has a role.")
 
     st.markdown("---")
-    st.markdown("#### Channel correlation")
-    past = [c for c in (features_cfg.get("past_observed") or [])
-            if c in present]
+    st.markdown("**Channel correlation**")
+    past = [c for c in (features_cfg.get("past_observed") or []) if c in present]
     if len(past) >= 2:
         stride = st.select_slider(
             "Subsample stride (every Nth row)", options=[5, 11, 17, 41, 101],
@@ -740,176 +939,31 @@ with tab_features:
 
 
 # --------------------------------------------------------------------------- #
-# Tab 3 — the multivariate time-series viewer
+# SECONDARY 3 — sources, provenance, and config drift
 # --------------------------------------------------------------------------- #
-with tab_series:
-    st.markdown("#### Inspect one crop-year sequence")
-    names = landkreis_name_map()
-    districts = sorted(panel["landkreis"].unique())
-    labelled = {landkreis: f"{names.get(landkreis, '')} ({landkreis})".strip()
-                for landkreis in districts}
+cadence = satellite_cadence(sig(INTERIM / "satellite.parquet"))
+cfg_cadence = cfg.get("satellite_composite_days")
+cadence_drift = bool(cadence and cfg_cadence is not None
+                     and int(cfg_cadence) != cadence[0])
 
-    s1, s2, s3 = st.columns([3, 2, 3])
-    with s1:
-        district = st.selectbox("District", districts,
-                                format_func=lambda k: labelled[k],
-                                key="ts_district")
-    d_panel = panel[panel["landkreis"] == district]
-    with s2:
-        crop = st.selectbox("Crop", sorted(d_panel["crop"].unique()),
-                            key="ts_crop")
-    dc_panel = d_panel[d_panel["crop"] == crop].sort_values("year")
-    avail_years = [int(y) for y in dc_panel["year"]]
-    with s3:
-        years = st.multiselect(
-            "Year(s)", avail_years,
-            default=avail_years[-1:] if avail_years else [],
-            max_selections=len(SERIES_COLORS), key="ts_years")
+# Same principle as the duplicate audit: the live discrepancy count is in the
+# label, so collapsing the section does not conceal that something disagrees.
+src_label = "Sources and provenance — per-source extent, licences, raw rows"
+if cadence_drift:
+    src_label += " · 1 config mismatch"
 
-    numeric_channels = [c for c in profile["numeric"]
-                        if c not in KEY_COLUMNS and c != "landkreis_id"]
-    default_channels = [c for c in ["temperature_air_max_2m",
-                                    "precipitation_height", "ndvi", "lai"]
-                        if c in numeric_channels]
-    ch1, ch2 = st.columns([4, 2])
-    with ch1:
-        channels = st.multiselect("Channels", numeric_channels,
-                                  default=default_channels, max_selections=8,
-                                  key="ts_channels")
-    with ch2:
-        mode = st.radio("Layout", ["Stacked (raw units)", "Overlaid (z-scored)"],
-                        key="ts_mode", horizontal=False)
-
-    if not years:
-        st.info("Pick at least one year. This district-crop pair exists in "
-                f"{len(avail_years)} of {n_years} years.")
-    elif not channels:
-        st.info("Pick at least one channel.")
-    else:
-        seq = sequence_slice(PQ_SIG, district, crop, tuple(sorted(years)),
-                             tuple(channels + [c for c in
-                                               ("ndvi_observed",) if c in
-                                               numeric_channels]))
-        if seq.empty:
-            st.warning("No rows returned for that combination.")
-        else:
-            phen = (cfg.get("phenology") or {}).get(crop, {})
-            sow, harv = phen.get("sowing_doy"), phen.get("harvest_doy")
-            win_lo = 1 if (sow is not None and harv is not None and sow > harv) else sow
-            meta = dc_panel[dc_panel["year"].isin(years)]
-
-            k1, k2, k3, k4 = st.columns(4)
-            with k1: kpi("Rows in slice", f"{len(seq):,}")
-            with k2: kpi("Season window (DOY)",
-                         f"{win_lo}–{harv}" if harv is not None else "—")
-            with k3: kpi("Yield (dt/ha)",
-                         " / ".join(f"{v:.1f}" for v in meta["yield_dt_per_ha"]))
-            with k4: kpi("Season coverage",
-                         " / ".join(f"{v:.0%}" for v in meta["coverage"]))
-
-            if "ndvi_observed" in seq.columns:
-                obs_share = float(seq["ndvi_observed"].mean())
-                st.caption(
-                    f"{obs_share:.1%} of days in this slice carry a genuine "
-                    f"satellite observation; the rest are carried forward from "
-                    f"the last composite. The step structure in the NDVI/EVI/LAI "
-                    f"traces below is that carry-forward, not a smooth signal.")
-
-            if mode.startswith("Stacked"):
-                fig = make_subplots(rows=len(channels), cols=1,
-                                    shared_xaxes=True, vertical_spacing=0.03,
-                                    subplot_titles=channels)
-                for r, ch in enumerate(channels, start=1):
-                    for i, y in enumerate(sorted(years)):
-                        sub = seq[seq["year"] == y]
-                        fig.add_trace(go.Scatter(
-                            x=sub["doy"], y=sub[ch], mode="lines", name=str(y),
-                            legendgroup=str(y), showlegend=(r == 1),
-                            line=dict(width=2,
-                                      color=SERIES_COLORS[i % len(SERIES_COLORS)]),
-                            hovertemplate=(f"{ch}<br>DOY %{{x}}<br>"
-                                           f"%{{y:.4g}}<extra>{y}</extra>")),
-                            row=r, col=1)
-                    if harv is not None:
-                        fig.add_vline(x=harv, line_dash="dot", line_width=1,
-                                      line_color="#888888", row=r, col=1)
-                fig.update_layout(height=max(300, 170 * len(channels)),
-                                  hovermode="x unified",
-                                  margin=dict(l=0, r=0, t=30, b=0),
-                                  legend_title_text="Year")
-                fig.update_xaxes(title_text="day of year", row=len(channels), col=1)
-                for ann in fig.layout.annotations:
-                    ann.font.size = 12
-                st.plotly_chart(fig, width="stretch")
-            else:
-                z = seq.copy()
-                for ch in channels:
-                    sd = z[ch].std()
-                    z[ch] = (z[ch] - z[ch].mean()) / (sd if sd else 1.0)
-                fig = go.Figure()
-                for i, ch in enumerate(channels):
-                    for y in sorted(years):
-                        sub = z[z["year"] == y]
-                        fig.add_trace(go.Scatter(
-                            x=sub["doy"], y=sub[ch], mode="lines",
-                            name=f"{ch} · {y}" if len(years) > 1 else ch,
-                            line=dict(width=2,
-                                      color=SERIES_COLORS[i % len(SERIES_COLORS)],
-                                      dash="solid" if y == min(years) else "dot"),
-                            hovertemplate="DOY %{x}<br>z %{y:.2f}<extra></extra>"))
-                if harv is not None:
-                    fig.add_vline(x=harv, line_dash="dot", line_width=1,
-                                  line_color="#888888",
-                                  annotation_text="harvest DOY")
-                fig.update_layout(height=460, hovermode="x unified",
-                                  xaxis_title="day of year",
-                                  yaxis_title="z-score (within this slice)",
-                                  margin=dict(l=0, r=0, t=10, b=0))
-                st.plotly_chart(fig, width="stretch")
-                st.caption("Z-scoring is per channel within this slice only — "
-                           "it makes shapes comparable, not magnitudes. Raw "
-                           "units live in the stacked layout.")
-
-            with st.expander("Rows behind this plot"):
-                st.dataframe(seq, width="stretch", hide_index=True)
-            st.download_button(
-                "Download this slice as CSV",
-                seq.to_csv(index=False).encode(),
-                file_name=f"{district}_{crop}_{'-'.join(str(y) for y in sorted(years))}.csv",
-                mime="text/csv")
-
-    st.markdown("---")
-    st.markdown("#### Yield label history for this district")
-    hist_rows = panel[panel["landkreis"] == district].sort_values(["crop", "year"])
-    if not hist_rows.empty:
-        yfig = px.line(hist_rows, x="year", y="yield_dt_per_ha", color="crop",
-                       markers=True, color_discrete_sequence=SERIES_COLORS)
-        yfig.update_traces(line=dict(width=2), marker=dict(size=6))
-        yfig.update_layout(height=360, xaxis_title="",
-                           yaxis_title="Yield (dt/ha)",
-                           legend_title_text="", margin=dict(t=10, b=0))
-        st.plotly_chart(yfig, width="stretch")
-        st.caption("Gaps are missing reporting years, not zeros — the panel is "
-                   "unbalanced and the line is broken where no label exists.")
-
-
-# --------------------------------------------------------------------------- #
-# Tab 4 — sources
-# --------------------------------------------------------------------------- #
-with tab_sources:
-    st.markdown("#### What each source actually contributes")
+with st.expander(src_label, expanded=False):
+    st.markdown("**What each source actually contributes**")
     ext_sigs = tuple(sig(INTERIM / n) for n in
                      ["weather.parquet", "satellite.parquet",
                       "soil.parquet", "yield.parquet"])
     st.dataframe(source_extent(ext_sigs), width="stretch", hide_index=True)
 
-    cadence = satellite_cadence(sig(INTERIM / "satellite.parquet"))
-    cfg_cadence = cfg.get("satellite_composite_days")
     if cadence:
         median_gap, n_dates = cadence
         msg = (f"Satellite: {n_dates:,} distinct observation dates, median gap "
                f"{median_gap} days.")
-        if cfg_cadence is not None and int(cfg_cadence) != median_gap:
+        if cadence_drift:
             st.warning(msg + f" `configs/data.yaml` declares "
                              f"`satellite_composite_days: {cfg_cadence}`, which "
                              f"the data does not support — the observed cadence "
@@ -924,36 +978,45 @@ with tab_sources:
                    f"parquet holds {int(panel['year'].min())}–"
                    f"{int(panel['year'].max())}.")
 
-    with st.expander("Provenance strings (static, from dashboard/utils.py)"):
-        st.caption("Source, licence and URL only. The counts and year ranges in "
-                   "this table are hand-maintained strings and are not derived "
-                   "from the build — trust the live table above for those.")
-        src_df = pd.DataFrame(DATA_SOURCES)
-        src_df["source"] = src_df["source"] + " — " + src_df["url"]
-        st.dataframe(
-            src_df.drop(columns=["url"]).rename(columns={
-                "modality": "Modality", "source": "Source",
-                "resolution": "Resolution", "variables": "Variables",
-                "years": "Years", "license": "License"}),
-            width="stretch", hide_index=True)
+    st.caption(f"Feature policy v{v_data if v_data is not None else '?'} "
+               f"(code v{v_code if v_code is not None else '?'}) · "
+               f"parquet {profile['size_mb']:.0f} MB in "
+               f"{profile['row_groups']} row groups · "
+               f"coverage floor {min_cov:.0%} of the configured growing season.")
 
-    with st.expander("Unified dataset — first rows"):
-        head = pq.ParquetFile(PROCESSED).read_row_group(0).slice(0, 200).to_pandas()
-        st.dataframe(head, width="stretch", hide_index=True)
+    st.markdown("---")
+    st.markdown("**Provenance strings (static, from dashboard/utils.py)**")
+    st.caption("Source, licence and URL only. The counts and year ranges in "
+               "this table are hand-maintained strings and are not derived "
+               "from the build — trust the live table above for those.")
+    src_df = pd.DataFrame(DATA_SOURCES)
+    src_df["source"] = src_df["source"] + " — " + src_df["url"]
+    st.dataframe(
+        src_df.drop(columns=["url"]).rename(columns={
+            "modality": "Modality", "source": "Source",
+            "resolution": "Resolution", "variables": "Variables",
+            "years": "Years", "license": "License"}),
+        width="stretch", hide_index=True)
 
-    with st.expander("Soil property distributions across districts"):
-        soil_path = INTERIM / "soil.parquet"
-        if soil_path.exists():
-            soil = pd.read_parquet(soil_path)
-            prop = st.selectbox(
-                "Property",
-                [c for c in soil.columns
-                 if c != "landkreis" and not c.endswith("_imputed")],
-                key="soil_prop")
-            sfig = px.histogram(soil, x=prop, nbins=40,
-                                color_discrete_sequence=[SERIES_COLORS[0]])
-            sfig.update_layout(height=330, yaxis_title="districts",
-                               margin=dict(t=10, b=0), bargap=0.02)
-            st.plotly_chart(sfig, width="stretch")
-        else:
-            st.info("Soil data missing. Run `01_download_data.py --source soilgrids`.")
+    st.markdown("---")
+    st.markdown("**Unified dataset — first rows**")
+    head = pq.ParquetFile(PROCESSED).read_row_group(0).slice(0, 200).to_pandas()
+    st.dataframe(head, width="stretch", hide_index=True)
+
+    st.markdown("---")
+    st.markdown("**Soil property distributions across districts**")
+    soil_path = INTERIM / "soil.parquet"
+    if soil_path.exists():
+        soil = pd.read_parquet(soil_path)
+        prop = st.selectbox(
+            "Property",
+            [c for c in soil.columns
+             if c != "landkreis" and not c.endswith("_imputed")],
+            key="soil_prop")
+        sfig = px.histogram(soil, x=prop, nbins=40,
+                            color_discrete_sequence=[SERIES_COLORS[0]])
+        sfig.update_layout(height=330, yaxis_title="districts",
+                           margin=dict(t=10, b=0), bargap=0.02)
+        st.plotly_chart(sfig, width="stretch")
+    else:
+        st.info("Soil data missing. Run `01_download_data.py --source soilgrids`.")

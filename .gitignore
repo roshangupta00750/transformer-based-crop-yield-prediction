@@ -75,3 +75,4 @@ results/logs/
 # which breaks `compileall` and the preflight gate. It is not registered in
 # nav.py and Streamlit never serves it.
 dashboard/pages/01_Problem.py
+dashboard/pages/18_Geographic.py

@@ -1,13 +1,20 @@
-"""Literature comparison — our best per-crop R² vs published EU/German
-crop-yield ML benchmarks.
+"""Literature comparison — how does our best per-crop R² sit against
+published EU/German crop-yield ML benchmarks?
 
-IMPORTANT CAVEAT (also shown on the page): each published study uses a
-different region, feature set, year range, target definition, and split,
-so the "Verdict" column is directional only. Our own R² is scored on
-absolute dt/ha that is reconstructed as (per-district climatological
-baseline + predicted anomaly), on a 2-year test split — both facts move
-the R² denominator relative to a study regressing absolute yield over
-many years. Use this page to frame related work, not as a citation table.
+One question, one chart. The default view is a KPI row and a dot plot: our
+best R² per crop, the published range as a grey bar, and — new here — the
+learn-nothing climatology baseline as its own marker on the same axis. That
+third mark is what makes the comparison honest: our target is an anomaly
+added back to a per-district climatological baseline, so a large share of
+every R² below is the baseline, not learned signal.
+
+The crop-by-crop table, the per-crop citations and the all-models table are
+still here, collapsed.
+
+IMPORTANT CAVEAT (also on the page): each published study uses a different
+region, feature set, year range, target definition, and split, so the
+"Verdict" column is directional only. Use this page to frame related work,
+not as a citation table.
 """
 from __future__ import annotations
 
@@ -16,12 +23,12 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
-import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from utils import (CHECKPOINTS_DIR, METRICS_DIR, divider, kpi, load_taxonomy,
-                   page_header)
+from utils import (CHECKPOINTS_DIR, METRICS_DIR, kpi,
+                   load_climatology_baseline, load_taxonomy, page_header)
 
 
 def _stale_banner(*metric_paths: Path) -> None:
@@ -48,10 +55,8 @@ def _stale_banner(*metric_paths: Path) -> None:
 st.set_page_config(page_title="Literature — Crop Yield Benchmark",
                    layout="wide")
 page_header("Literature comparison",
-            "Our best per-crop R² (from `multicrop_summary.csv`) vs "
-            "published EU / German crop-yield ML studies. Different "
-            "studies use different data, splits, and metrics — treat these "
-            "as directional comparisons, not strict head-to-heads.")
+            "How does our best per-crop R² sit against published EU / German "
+            "crop-yield ML studies?")
 
 # --------------------------------------------------------------------------- #
 # Published benchmarks (hand-curated, EU/German focus)
@@ -164,27 +169,9 @@ best_per_crop = (ours.loc[ours.groupby("crop")["r2"].idxmax()]
                                   "r2": "our_r2", "rmse": "our_rmse",
                                   "n": "our_n"}))
 
-# --------------------------------------------------------------------------- #
-# Why the Verdict column is directional only
-# --------------------------------------------------------------------------- #
-st.info(
-    "**These R² values are not directly comparable to the published ones.** "
-    "Our prediction is an anomaly that is added back to a per-district, "
-    "per-crop climatological baseline before scoring, so part of the R² "
-    "below comes from that baseline offset rather than from learned signal. "
-    "The split is also only the 2024-25 seasons, so the denominator carries "
-    "almost no inter-annual variance. The published studies differ again in "
-    "region, target, and split. Treat the Verdict column as directional."
-    + ("" if (METRICS_DIR / "climatology_baseline.csv").exists() else
-       " No climatology-baseline row exists in `results/metrics/`, so the "
-       "page cannot yet show how much of each R² a learn-nothing predictor "
-       "already achieves.")
-)
-
-# --------------------------------------------------------------------------- #
-# View 1 — Top-level leaderboard
-# --------------------------------------------------------------------------- #
-divider("Crop-by-crop summary")
+climatology = load_climatology_baseline()
+clim_by_crop = (climatology.set_index("crop")["r2"]
+                if not climatology.empty else pd.Series(dtype=float))
 
 
 def _verdict(our_r2: float, lit_low: float, lit_high: float) -> str:
@@ -212,82 +199,51 @@ lit_per_crop = LITERATURE.groupby("crop", dropna=False).agg(
 leaderboard = best_per_crop.merge(lit_per_crop, on="crop", how="left")
 leaderboard["verdict"] = leaderboard.apply(
     lambda r: _verdict(r["our_r2"], r["lit_low"], r["lit_high"]), axis=1)
+leaderboard["climatology_r2"] = leaderboard["crop"].map(clim_by_crop)
 leaderboard = leaderboard.sort_values("our_r2", ascending=False)
 
+# --------------------------------------------------------------------------- #
+# PRIMARY 1 — the KPI row, with the learn-nothing reference in it
+# --------------------------------------------------------------------------- #
+n_crops = len(leaderboard)
+n_bench = int(leaderboard["lit_low"].notna().sum())
+n_within = int(leaderboard["verdict"].isin(["within range", "above range"]).sum())
+our_mean = float(leaderboard["our_r2"].mean())
+clim_mean = float(clim_by_crop.mean()) if not clim_by_crop.empty else None
+n_beat_clim = int((leaderboard["our_r2"] > leaderboard["climatology_r2"]).sum()) \
+    if leaderboard["climatology_r2"].notna().any() else 0
 
-# Build a display column for the literature range
-def _fmt_range(lo, hi):
-    if pd.isna(lo) or pd.isna(hi):
-        return "—"
-    return f"{lo:.2f} – {hi:.2f}"
+k1, k2, k3, k4 = st.columns(4)
+with k1:
+    kpi("Crops with a published benchmark", f"{n_bench} / {n_crops}")
+with k2:
+    kpi("Within or above published range", f"{n_within} / {n_bench}")
+with k3:
+    kpi("Our mean best-per-crop R²", f"{our_mean:.3f}",
+        delta=(f"{our_mean - clim_mean:+.3f} vs climatology"
+               if clim_mean is not None else None))
+with k4:
+    kpi("Climatology baseline mean R²",
+        f"{clim_mean:.3f}" if clim_mean is not None else "—")
 
-
-# Overlay taxonomy: for each crop, show phenology family + taxonomy primary +
-# whether the taxonomy's primary matches our best model
-tax = load_taxonomy()
-if tax:
-    tax_families = {c: v.get("phenology_family", "—")
-                    for c, v in tax.get("crops", {}).items()}
-    tax_predictions = {c: (v or {}).get("primary", "—")
-                       for c, v in tax.get("predicted_winners", {}).items()}
-    leaderboard["phenology_family"] = leaderboard["crop"].map(tax_families).fillna("—")
-    leaderboard["taxonomy_pick"] = leaderboard["crop"].map(tax_predictions).fillna("—")
-    leaderboard["taxonomy_match"] = leaderboard.apply(
-        lambda r: "hit" if r["taxonomy_pick"] == r["our_best_model"]
-                  else ("—" if r["taxonomy_pick"] == "—" else "miss"),
-        axis=1,
-    )
-
-leaderboard_disp = leaderboard.copy()
-leaderboard_disp["lit_range"] = leaderboard_disp.apply(
-    lambda r: _fmt_range(r["lit_low"], r["lit_high"]), axis=1)
-
-base_cols = ["crop", "our_best_model", "our_r2", "lit_range", "n_studies", "verdict"]
-rename_map = {
-    "crop": "Crop", "our_best_model": "Our best model",
-    "our_r2": "Our R²", "lit_range": "Published R² range",
-    "n_studies": "# studies", "verdict": "Verdict",
-}
-if "phenology_family" in leaderboard_disp.columns:
-    base_cols = (["crop", "phenology_family", "our_best_model", "taxonomy_pick",
-                  "taxonomy_match", "our_r2", "lit_range", "n_studies", "verdict"])
-    rename_map.update({
-        "phenology_family": "Phenology family",
-        "taxonomy_pick": "Taxonomy pick",
-        "taxonomy_match": "Taxonomy vs ours",
-    })
-
-leaderboard_disp = leaderboard_disp[base_cols].rename(columns=rename_map)
-
-
-def _tax_color(val):
-    if val == "hit":
-        return "background-color: #d4edda; color: #155724"
-    if val == "miss":
-        return "background-color: #f8d7da; color: #721c24"
-    return ""
-
-
-styled = leaderboard_disp.style.format({"Our R²": "{:.3f}"})
-if "Taxonomy vs ours" in leaderboard_disp.columns:
-    styled = styled.map(_tax_color, subset=["Taxonomy vs ours"])
-
-st.dataframe(styled, hide_index=True, width="stretch")
-
-if tax:
-    n_hits = int((leaderboard["taxonomy_match"] == "hit").sum())
-    n_total = int((leaderboard["taxonomy_match"] != "—").sum())
-    st.caption(f"Taxonomy's a-priori pick matches our observed best model on "
-               f"{n_hits}/{n_total} crops.")
-
-# Visual: dot plot of our R² with literature range bars per crop
-fig = px.scatter(
-    leaderboard, x="our_r2", y="crop",
-    hover_data=["our_best_model", "lit_low", "lit_high"],
-    title="Our best R² vs published literature range, per crop",
-    labels={"our_r2": f"Our R² (best of {ours['model'].nunique()} models)",
-            "crop": ""},
+st.caption(
+    f"'Ours' is the best of {ours['model'].nunique()} models picked per crop "
+    "on the test split — an oracle upper bound, not a deployable single "
+    "model. "
+    + (f"It beats the learn-nothing climatology baseline on {n_beat_clim}/"
+       f"{n_crops} crops (`climatology_baseline.csv`)."
+       if clim_mean is not None else
+       "No `climatology_baseline.csv` on disk, so the learn-nothing "
+       "reference is unknown.")
 )
+
+# --------------------------------------------------------------------------- #
+# PRIMARY 2 — the one chart
+# --------------------------------------------------------------------------- #
+st.markdown("#### Our best R² vs published range, per crop")
+
+order = leaderboard["crop"].tolist()
+fig = go.Figure()
 for _, row in leaderboard.iterrows():
     if pd.notna(row["lit_low"]):
         fig.add_shape(
@@ -296,78 +252,191 @@ for _, row in leaderboard.iterrows():
             y0=row["crop"], y1=row["crop"],
             line=dict(color="rgba(120,120,120,0.55)", width=8),
         )
-fig.update_traces(marker=dict(size=14, color="#1f77b4",
-                              line=dict(color="white", width=2)))
-fig.update_layout(height=420,
-                  xaxis=dict(range=[-0.1, 1.0], title_standoff=8),
-                  showlegend=False)
+if leaderboard["climatology_r2"].notna().any():
+    fig.add_trace(go.Scatter(
+        x=leaderboard["climatology_r2"], y=leaderboard["crop"],
+        mode="markers", name="Climatology baseline (learn-nothing)",
+        marker=dict(symbol="diamond", size=13, color="#7a5195",
+                    line=dict(color="white", width=1.5)),
+        hovertemplate="%{y}<br>climatology R²: %{x:.3f}<extra></extra>",
+    ))
+fig.add_trace(go.Scatter(
+    x=leaderboard["our_r2"], y=leaderboard["crop"],
+    mode="markers", name=f"Ours (best of {ours['model'].nunique()})",
+    marker=dict(size=14, color="#1f77b4", line=dict(color="white", width=2)),
+    customdata=leaderboard[["our_best_model"]].values,
+    hovertemplate="%{y}<br>our R²: %{x:.3f}<br>model: %{customdata[0]}"
+                  "<extra></extra>",
+))
 fig.add_vline(x=0, line_dash="dot", line_color="grey")
+fig.update_layout(
+    height=460, margin=dict(l=10, r=10, t=30, b=10),
+    xaxis=dict(range=[-0.1, 1.0], title="R²", title_standoff=8),
+    yaxis=dict(categoryorder="array", categoryarray=order[::-1], title=""),
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+)
 st.plotly_chart(fig, width="stretch")
-st.caption("Grey bar = published range (lowest to highest reported R² across "
-           "the curated studies for that crop).")
-
-# --------------------------------------------------------------------------- #
-# View 2 — Per-crop drill-down with citations
-# --------------------------------------------------------------------------- #
-divider("Per-crop drill-down")
-
-sel_crop = st.selectbox(
-    "Crop",
-    sorted(best_per_crop["crop"].tolist()),
-    index=sorted(best_per_crop["crop"].tolist()).index("winter_wheat")
-    if "winter_wheat" in best_per_crop["crop"].tolist() else 0,
+st.caption(
+    "Grey bar = published range (lowest to highest reported R² across the "
+    "curated studies for that crop). The purple diamond is the learn-nothing "
+    "climatology baseline for the same crop and the same split: the gap "
+    "between diamond and circle is the only part of our R² that is learned "
+    "signal. Published studies differ in region, target, and split — read "
+    "the bars as framing, not as a head-to-head."
 )
 
-our_row = best_per_crop[best_per_crop["crop"] == sel_crop].iloc[0]
-lit_rows = LITERATURE[LITERATURE["crop"] == sel_crop].copy()
+# --------------------------------------------------------------------------- #
+# SECONDARY — crop-by-crop table
+# --------------------------------------------------------------------------- #
+with st.expander("Crop-by-crop table", expanded=False):
+    # Overlay taxonomy: phenology family + taxonomy primary + whether the
+    # taxonomy's primary matches our best model.
+    tax = load_taxonomy()
+    if tax:
+        tax_families = {c: v.get("phenology_family", "—")
+                        for c, v in tax.get("crops", {}).items()}
+        tax_predictions = {c: (v or {}).get("primary", "—")
+                           for c, v in tax.get("predicted_winners", {}).items()}
+        leaderboard["phenology_family"] = (leaderboard["crop"]
+                                           .map(tax_families).fillna("—"))
+        leaderboard["taxonomy_pick"] = (leaderboard["crop"]
+                                        .map(tax_predictions).fillna("—"))
+        leaderboard["taxonomy_match"] = leaderboard.apply(
+            lambda r: "hit" if r["taxonomy_pick"] == r["our_best_model"]
+                      else ("—" if r["taxonomy_pick"] == "—" else "miss"),
+            axis=1,
+        )
 
-k1, k2, k3 = st.columns(3)
-with k1:
-    kpi("Our best model", str(our_row["our_best_model"]).upper())
-with k2:
-    kpi("Our R² (2024-25 test)", f"{our_row['our_r2']:.3f}")
-with k3:
-    kpi("Our RMSE (dt/ha)", f"{our_row['our_rmse']:.1f}")
+    def _fmt_range(lo, hi):
+        if pd.isna(lo) or pd.isna(hi):
+            return "—"
+        return f"{lo:.2f} – {hi:.2f}"
 
-if lit_rows.empty:
-    st.info("No curated literature for this crop in the table.")
-else:
+    disp = leaderboard.copy()
+    disp["lit_range"] = disp.apply(
+        lambda r: _fmt_range(r["lit_low"], r["lit_high"]), axis=1)
+
+    base_cols = ["crop", "our_best_model", "our_r2", "climatology_r2",
+                 "lit_range", "n_studies", "verdict"]
+    rename_map = {
+        "crop": "Crop", "our_best_model": "Our best model",
+        "our_r2": "Our R²", "climatology_r2": "Climatology R²",
+        "lit_range": "Published R² range",
+        "n_studies": "# studies", "verdict": "Verdict",
+    }
+    if "phenology_family" in disp.columns:
+        base_cols = ["crop", "phenology_family", "our_best_model",
+                     "taxonomy_pick", "taxonomy_match", "our_r2",
+                     "climatology_r2", "lit_range", "n_studies", "verdict"]
+        rename_map.update({
+            "phenology_family": "Phenology family",
+            "taxonomy_pick": "Taxonomy pick",
+            "taxonomy_match": "Taxonomy vs ours",
+        })
+
+    disp = disp[base_cols].rename(columns=rename_map)
+
+    def _tax_color(val):
+        if val == "hit":
+            return "background-color: #d4edda; color: #155724"
+        if val == "miss":
+            return "background-color: #f8d7da; color: #721c24"
+        return ""
+
+    styled = disp.style.format({"Our R²": "{:.3f}",
+                                "Climatology R²": "{:.3f}"}, na_rep="—")
+    if "Taxonomy vs ours" in disp.columns:
+        styled = styled.map(_tax_color, subset=["Taxonomy vs ours"])
+    st.dataframe(styled, hide_index=True, width="stretch")
+
+    if tax:
+        n_hits = int((leaderboard["taxonomy_match"] == "hit").sum())
+        n_total = int((leaderboard["taxonomy_match"] != "—").sum())
+        st.caption(f"Taxonomy's a-priori pick matches our observed best model "
+                   f"on {n_hits}/{n_total} crops.")
+
+# --------------------------------------------------------------------------- #
+# SECONDARY — per-crop drill-down with citations
+# --------------------------------------------------------------------------- #
+with st.expander("Per-crop detail and citations", expanded=False):
+    crop_opts = sorted(best_per_crop["crop"].tolist())
+    sel_crop = st.selectbox(
+        "Crop", crop_opts,
+        index=crop_opts.index("winter_wheat")
+        if "winter_wheat" in crop_opts else 0,
+    )
+
+    our_row = best_per_crop[best_per_crop["crop"] == sel_crop].iloc[0]
+    _clim_here = float(clim_by_crop[sel_crop]) \
+        if sel_crop in clim_by_crop.index else None
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        kpi("Our best model", str(our_row["our_best_model"]).upper())
+    with c2:
+        kpi("Our R² (test split)", f"{our_row['our_r2']:.3f}",
+            delta=(f"{our_row['our_r2'] - _clim_here:+.3f} vs climatology"
+                   if _clim_here is not None else None))
+    with c3:
+        kpi("Climatology R²",
+            f"{_clim_here:.3f}" if _clim_here is not None else "—")
+    with c4:
+        kpi("Our RMSE (dt/ha)", f"{our_row['our_rmse']:.1f}")
+
+    lit_rows = LITERATURE[LITERATURE["crop"] == sel_crop].copy()
     st.markdown("##### Published benchmarks")
-    lit_disp = lit_rows[["study", "region", "model", "r2_low", "r2_high",
-                         "ref"]].rename(columns={
-        "study": "Study", "region": "Region", "model": "Model",
-        "r2_low": "R² low", "r2_high": "R² high", "ref": "Citation",
-    })
+    if lit_rows.empty:
+        st.info("No curated literature for this crop in the table.")
+    else:
+        lit_disp = lit_rows[["study", "region", "model", "r2_low", "r2_high",
+                             "ref"]].rename(columns={
+            "study": "Study", "region": "Region", "model": "Model",
+            "r2_low": "R² low", "r2_high": "R² high", "ref": "Citation",
+        })
+        st.dataframe(
+            lit_disp.style.format({"R² low": "{:.2f}", "R² high": "{:.2f}"},
+                                  na_rep="—"),
+            hide_index=True, width="stretch",
+        )
+
+    st.markdown(f"##### All {ours['model'].nunique()} models on {sel_crop}")
+    all_models = ours[ours["crop"] == sel_crop].sort_values("r2",
+                                                           ascending=False)
     st.dataframe(
-        lit_disp.style.format({"R² low": "{:.2f}", "R² high": "{:.2f}"},
-                              na_rep="—"),
+        all_models[["model", "r2", "rmse", "mae", "n"]].rename(
+            columns={"model": "Model", "r2": "R²", "rmse": "RMSE",
+                     "mae": "MAE", "n": "n"}
+        ).style.format({"R²": "{:.3f}", "RMSE": "{:.2f}", "MAE": "{:.2f}"}),
         hide_index=True, width="stretch",
     )
 
 # --------------------------------------------------------------------------- #
-# View 3 — All other models per crop (for "best wasn't the only one")
+# SECONDARY — comparability caveat and provenance
 # --------------------------------------------------------------------------- #
-divider(f"All {ours['model'].nunique()} models on the selected crop")
-
-all_models = ours[ours["crop"] == sel_crop].sort_values("r2", ascending=False)
-st.dataframe(
-    all_models[["model", "r2", "rmse", "mae", "n"]].rename(
-        columns={"model": "Model", "r2": "R²", "rmse": "RMSE",
-                 "mae": "MAE", "n": "n"}
-    ).style.format({"R²": "{:.3f}", "RMSE": "{:.2f}", "MAE": "{:.2f}"}),
-    hide_index=True, width="stretch",
-)
-
-# --------------------------------------------------------------------------- #
-# Footer
-# --------------------------------------------------------------------------- #
-st.markdown("---")
-_means = ours.groupby("model")["r2"].mean().sort_values(ascending=False)
-st.caption(
-    "Literature entries live in the `LITERATURE` DataFrame at the top of "
-    "`dashboard/pages/16_Literature.py`; the R² ranges there are "
-    "best-effort estimates, not verified replications — check them against "
-    "the PDFs before the report. Our side is read live from "
-    "`multicrop_summary.csv`; mean R² across the 10 crops is "
-    + ", ".join(f"{m} {v:.3f}" for m, v in _means.items()) + "."
-)
+with st.expander("Why these R² are not directly comparable", expanded=False):
+    st.info(
+        "**These R² values are not directly comparable to the published "
+        "ones.** Our prediction is an anomaly that is added back to a "
+        "per-district, per-crop climatological baseline before scoring, so "
+        "part of the R² above comes from that baseline offset rather than "
+        "from learned signal — which is exactly what the climatology marker "
+        "on the chart quantifies. The split is also only the 2024-25 seasons, "
+        "so the denominator carries almost no inter-annual variance. The "
+        "published studies differ again in region, target, and split. Treat "
+        "the Verdict column as directional."
+        + ("" if not climatology.empty else
+           " No climatology-baseline row exists in `results/metrics/`, so the "
+           "page cannot show how much of each R² a learn-nothing predictor "
+           "already achieves.")
+    )
+    _means = ours.groupby("model")["r2"].mean().sort_values(ascending=False)
+    st.caption(
+        "Literature entries live in the `LITERATURE` DataFrame at the top of "
+        "`dashboard/pages/16_Literature.py`; the R² ranges there are "
+        "best-effort estimates, not verified replications — check them "
+        "against the PDFs before the report. Our side is read live from "
+        "`multicrop_summary.csv` (written "
+        f"{datetime.fromtimestamp(summary_path.stat().st_mtime):%Y-%m-%d %H:%M}"
+        "); mean R² across the crops is "
+        + ", ".join(f"{m} {v:.3f}" for m, v in _means.items()) + "."
+    )

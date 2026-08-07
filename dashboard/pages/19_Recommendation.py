@@ -1,21 +1,29 @@
 """Supplementary multi-criteria recommendation (not paper headline).
 
-Loads ``results/metrics/composite_ranking.csv`` (produced by
-``scripts/15_composite_ranking.py``) and recomputes the weighted
-composite in-page as the user drags the four weight sliders, so it is
-visible how the recommendation shifts when climate robustness,
-interpretability, or compute cost is upweighted against pure R².
+One question: **which model would you pick per crop once accuracy, climate
+robustness, interpretability and compute cost are weighed together?** The
+default view is the weight sliders, a KPI row and the per-crop winner table.
+The composite heatmap and the full per-(crop, model) breakdown are still
+here, collapsed.
 
-This page is Chapter 7 supplementary material — the paper's headline
-claim remains per-crop accuracy validated against the a priori
-taxonomy (see page 13 Taxonomy). Read this as a "we also explored"
-exhibit, not a replacement ranking.
+Loads ``results/metrics/composite_ranking.csv`` (produced by
+``scripts/15_composite_ranking.py``) and recomputes the weighted composite
+in-page as the user drags the four weight sliders, so it is visible how the
+recommendation shifts when climate robustness, interpretability, or compute
+cost is upweighted against pure R².
+
+This page is Chapter 7 supplementary material — the paper's headline claim
+remains per-crop accuracy validated against the a priori taxonomy (see page
+13 Taxonomy). Read this as a "we also explored" exhibit, not a replacement
+ranking.
 
 Only the composite and the ranks are live. The four component scores are
-frozen inside composite_ranking.csv at the moment that CSV was written,
-so the page checks that file's mtime against the newest checkpoint and
-against its own inputs (multicrop_summary.csv, counterfactual_daily_
-summary.csv) and refuses to present a stale ranking as current.
+frozen inside composite_ranking.csv at the moment that CSV was written, so
+the page checks that file's mtime against the newest checkpoint and against
+its own inputs (multicrop_summary.csv, counterfactual_daily_summary.csv) and
+refuses to present a stale ranking as current. Those two warnings are
+currently firing, so they stay on screen rather than moving into an
+expander.
 """
 from __future__ import annotations
 
@@ -29,14 +37,13 @@ import plotly.express as px
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from utils import CHECKPOINTS_DIR, METRICS_DIR, divider, page_header
+from utils import CHECKPOINTS_DIR, METRICS_DIR, kpi, page_header
 
 st.set_page_config(page_title="Recommendation — Crop Yield Benchmark",
                    layout="wide")
 page_header("Supplementary — multi-criteria model recommendation",
-            "Composite = w_acc * accuracy + w_climate * climate stability "
-            "+ w_interp * interpretability + w_compute * compute cost. "
-            "Drag the sliders to see how the winner shifts.")
+            "Which model wins per crop once accuracy, climate stability, "
+            "interpretability and compute cost are weighed together?")
 
 # --------------------------------------------------------------------------- #
 # Data
@@ -62,7 +69,8 @@ if df.empty:
     st.stop()
 
 # --------------------------------------------------------------------------- #
-# Staleness — the component scores are baked into the CSV, not read live
+# Staleness — the component scores are baked into the CSV, not read live.
+# A firing warning is never collapsed.
 # --------------------------------------------------------------------------- #
 _comp_mt = COMPOSITE_CSV.stat().st_mtime
 _ckpts = [*CHECKPOINTS_DIR.glob("*.pt"), *CHECKPOINTS_DIR.glob("*.ubj")]
@@ -104,11 +112,8 @@ if MULTICROP_CSV.exists() and MULTICROP_CSV.stat().st_mtime > _comp_mt:
     _acc_live = _mc[["crop", "model", "acc_live"]]
 
 # --------------------------------------------------------------------------- #
-# Weight sliders — recompute composite live
+# CONTROLS — the four weights drive every primary below
 # --------------------------------------------------------------------------- #
-st.subheader("Weights")
-st.caption("Renormalized to sum to 1.")
-
 c1, c2, c3, c4 = st.columns(4)
 with c1:
     w_acc = st.slider("w_acc (accuracy)", 0.0, 1.0, 0.50, 0.05)
@@ -128,12 +133,11 @@ if total <= 0:
 w_acc_n, w_climate_n, w_interp_n, w_compute_n = (
     w_acc / total, w_climate / total, w_interp / total, w_compute / total
 )
-
-wc1, wc2, wc3, wc4 = st.columns(4)
-wc1.metric("acc (renorm.)", f"{w_acc_n:.2f}")
-wc2.metric("climate (renorm.)", f"{w_climate_n:.2f}")
-wc3.metric("interp (renorm.)", f"{w_interp_n:.2f}")
-wc4.metric("compute (renorm.)", f"{w_compute_n:.2f}")
+st.caption(
+    f"Renormalized to sum to 1 — accuracy {w_acc_n:.2f} · climate "
+    f"{w_climate_n:.2f} · interpretability {w_interp_n:.2f} · compute "
+    f"{w_compute_n:.2f}."
+)
 
 df = df.copy()
 df["composite_score"] = (
@@ -145,10 +149,8 @@ df["composite_score"] = (
 df["rank"] = (df.groupby("crop")["composite_score"]
                 .rank(ascending=False, method="min").astype(int))
 
-divider("Per-crop composite winner")
-
 # --------------------------------------------------------------------------- #
-# Per-crop winner table with component breakdown
+# PRIMARY 1 — what the current weights recommend, in four numbers
 # --------------------------------------------------------------------------- #
 winner_rows = []
 for crop, g in df.groupby("crop"):
@@ -163,10 +165,30 @@ for crop, g in df.groupby("crop"):
         "compute": round(float(top["compute_score"]), 3),
     })
 winners = pd.DataFrame(winner_rows).sort_values("crop").reset_index(drop=True)
+
+_counts = winners["winner"].value_counts()
+k1, k2, k3, k4 = st.columns(4)
+with k1:
+    kpi("Crops ranked", f"{df['crop'].nunique()}")
+with k2:
+    kpi("Models compared", f"{df['model'].nunique()}")
+with k3:
+    kpi("Most often recommended",
+        str(_counts.index[0]) if not _counts.empty else "—")
+with k4:
+    kpi("Crops it wins",
+        f"{int(_counts.iloc[0])} / {len(winners)}" if not _counts.empty else "—")
+
+# --------------------------------------------------------------------------- #
+# PRIMARY 2 — the one table: per-crop winner with its component breakdown
+# --------------------------------------------------------------------------- #
+st.markdown("#### Per-crop composite winner")
 st.dataframe(winners, width="stretch", hide_index=True)
 
 # Drift diagnostic: how many of those winners would change if the accuracy
-# component were rebuilt from the current multicrop_summary.csv?
+# component were rebuilt from the current multicrop_summary.csv? This warning
+# is a live staleness signal, so it stays visible next to the table it
+# qualifies.
 if not _acc_live.empty:
     _chk = df.merge(_acc_live, on=["crop", "model"], how="inner")
     if not _chk.empty:
@@ -197,47 +219,56 @@ if not _acc_live.empty:
               "scores."
         )
 
-divider("Composite heatmap (crop × model)")
+# --------------------------------------------------------------------------- #
+# SECONDARY — heatmap and the full per-(crop, model) breakdown
+# --------------------------------------------------------------------------- #
+with st.expander("Composite heatmap and full per-(crop, model) breakdown",
+                 expanded=False):
+    pivot = df.pivot(index="crop", columns="model", values="composite_score")
+    # Order columns by mean composite so the fastest-plus-accurate models sit left.
+    col_order = pivot.mean(axis=0).sort_values(ascending=False).index.tolist()
+    pivot = pivot.loc[:, col_order]
+
+    fig = px.imshow(
+        pivot.values,
+        x=pivot.columns, y=pivot.index,
+        color_continuous_scale="Viridis",
+        zmin=0.0, zmax=1.0,
+        aspect="auto",
+        text_auto=".2f",
+        labels={"x": "model", "y": "crop", "color": "composite"},
+    )
+    fig.update_layout(height=520, margin=dict(l=10, r=10, t=30, b=10))
+    st.plotly_chart(fig, width="stretch")
+
+    show_cols = ["crop", "model", "rank", "composite_score",
+                 "acc_score", "climate_score", "interp_score", "compute_score"]
+    display = (df[show_cols]
+                 .sort_values(["crop", "rank"])
+                 .reset_index(drop=True))
+    # Round for display without mutating the underlying frame.
+    for c in ["composite_score", "acc_score", "climate_score",
+              "interp_score", "compute_score"]:
+        display[c] = display[c].round(3)
+    st.dataframe(display, width="stretch", hide_index=True)
 
 # --------------------------------------------------------------------------- #
-# Heatmap
+# SECONDARY — provenance
 # --------------------------------------------------------------------------- #
-pivot = df.pivot(index="crop", columns="model", values="composite_score")
-# Order columns by mean composite so the fastest-plus-accurate models sit left.
-col_order = pivot.mean(axis=0).sort_values(ascending=False).index.tolist()
-pivot = pivot.loc[:, col_order]
-
-fig = px.imshow(
-    pivot.values,
-    x=pivot.columns, y=pivot.index,
-    color_continuous_scale="Viridis",
-    zmin=0.0, zmax=1.0,
-    aspect="auto",
-    text_auto=".2f",
-    labels={"x": "model", "y": "crop", "color": "composite"},
-)
-fig.update_layout(height=520, margin=dict(l=10, r=10, t=30, b=10))
-st.plotly_chart(fig, width="stretch")
-
-# --------------------------------------------------------------------------- #
-# Full per-(crop, model) breakdown for inspection
-# --------------------------------------------------------------------------- #
-divider("Full per-(crop, model) breakdown")
-show_cols = ["crop", "model", "rank", "composite_score",
-             "acc_score", "climate_score", "interp_score", "compute_score"]
-display = (df[show_cols]
-             .sort_values(["crop", "rank"])
-             .reset_index(drop=True))
-# Round for display without mutating the underlying frame.
-for c in ["composite_score", "acc_score", "climate_score",
-          "interp_score", "compute_score"]:
-    display[c] = display[c].round(3)
-st.dataframe(display, width="stretch", hide_index=True)
-
-st.caption(
-    "Component-score definitions and calibration constants are in "
-    "`scripts/15_composite_ranking.py`. The four component scores come "
-    f"from `{COMPOSITE_CSV.name}` as written on "
-    f"{datetime.fromtimestamp(_comp_mt):%Y-%m-%d %H:%M}; only the composite "
-    "and the ranks are recomputed as you drag the sliders."
-)
+with st.expander("Provenance", expanded=False):
+    st.dataframe(
+        pd.DataFrame([{
+            "Artefact": p.name,
+            "Last written": datetime.fromtimestamp(
+                p.stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
+        } for p in (COMPOSITE_CSV, MULTICROP_CSV, COUNTERFACTUAL_CSV)
+            if p.exists()]),
+        hide_index=True, width="stretch",
+    )
+    st.caption(
+        "Component-score definitions and calibration constants are in "
+        "`scripts/15_composite_ranking.py`. The four component scores come "
+        f"from `{COMPOSITE_CSV.name}` as written on "
+        f"{datetime.fromtimestamp(_comp_mt):%Y-%m-%d %H:%M}; only the "
+        "composite and the ranks are recomputed as you drag the sliders."
+    )

@@ -144,6 +144,8 @@ _ckpt = newest_checkpoint_mtime()
 _fmt = "%Y-%m-%d %H:%M"
 IS_STALE = _ckpt > _h_mtime
 
+# A firing staleness error stays on the surface — it invalidates every number
+# on the page, so it is not something a reader should have to open.
 if IS_STALE:
     st.error(
         f"**These horizon numbers describe superseded checkpoints.** "
@@ -151,37 +153,18 @@ if IS_STALE:
         f"{_dt.datetime.fromtimestamp(_h_mtime):{_fmt}}; the newest model "
         f"checkpoint was written {_dt.datetime.fromtimestamp(_ckpt):{_fmt}}. "
         f"Rerun `python scripts/05c_eval_horizons.py` before quoting anything "
-        f"on this page. The evidence of the mismatch is expanded below."
+        f"on this page. The evidence of the mismatch is under Provenance."
     )
 
+# Computed here, rendered inside the Provenance expander at the foot.
 mc = load_multicrop_summary()
+cmp_df = pd.DataFrame()
 if IS_STALE and not mc.empty and "full" in set(df["horizon"]):
     cmp_df = (df[df["horizon"] == "full"][["model", "crop", "r2", "n"]]
               .merge(mc[["model", "crop", "r2", "n"]], on=["model", "crop"],
                      how="inner", suffixes=("_horizons", "_current")))
     if not cmp_df.empty:
         cmp_df["Δ R²"] = cmp_df["r2_horizons"] - cmp_df["r2_current"]
-        with st.expander(
-                f"Disagreement with the current per-crop evaluation "
-                f"({len(cmp_df)} shared (model, crop) pairs, "
-                f"max |Δ R²| = {cmp_df['Δ R²'].abs().max():.3f})"):
-            st.caption(
-                "Same models, same crops, no in-season cutoff on either side. "
-                "`multicrop_summary.csv` is the current evaluation; the "
-                "`n` columns differ too, so the two files do not even score "
-                "the same test population."
-            )
-            st.dataframe(
-                cmp_df.sort_values("Δ R²", key=abs, ascending=False)
-                      .rename(columns={"r2_horizons": "R² (horizons file)",
-                                       "r2_current": "R² (current eval)",
-                                       "n_horizons": "n (horizons file)",
-                                       "n_current": "n (current eval)"})
-                      .style.format({"R² (horizons file)": "{:.3f}",
-                                     "R² (current eval)": "{:.3f}",
-                                     "Δ R²": "{:+.3f}"}),
-                width="stretch", hide_index=True,
-            )
 
 # --------------------------------------------------------------------------- #
 # Coverage — drop models with no in-season rows instead of rendering an empty
@@ -193,17 +176,11 @@ missing = [m for m in MODEL_ORDER
            if m in set(df["model"]) and m not in covered]
 absent = [m for m in MODEL_ORDER if m not in set(df["model"])]
 
-if missing or absent:
-    gaps = []
-    if missing:
-        gaps.append(f"no in-season rows: {', '.join(missing)}")
-    if absent:
-        gaps.append(f"absent from the file: {', '.join(absent)}")
-    st.warning(
-        "Not every architecture is evaluated at in-season horizons — "
-        + "; ".join(gaps)
-        + ". Those models are excluded below rather than drawn as blanks."
-    )
+coverage_gaps = []
+if missing:
+    coverage_gaps.append(f"no in-season rows: {', '.join(missing)}")
+if absent:
+    coverage_gaps.append(f"absent from the file: {', '.join(absent)}")
 
 df = df[df["model"].isin(covered)]
 if df.empty:
@@ -294,124 +271,186 @@ with right:
                           legend_title_text="Model")
         st.plotly_chart(fig, width="stretch")
 
-# Table view beneath the chart: the numbers behind it, and the accessible
-# fallback for the low-contrast categorical slots.
-if not sub.empty:
-    piv = (sub.pivot(index="model", columns="horizon", values="r2")
-              .reindex(index=[m for m in MODEL_ORDER if m in set(sub["model"])]))
-    cols = sorted([c for c in piv.columns if c.startswith("h-")],
-                  key=lambda c: int(c[2:-1]))
-    if "full" in piv.columns:
-        cols.append("full")
-    piv = piv[cols]
-    piv.insert(0, "class", [model_class(m) for m in piv.index])
-    if sel_crop in clim_by_crop:
-        piv.insert(1, "climatology (null)", clim_by_crop[sel_crop])
-    st.dataframe(
-        piv.style.format("{:.3f}", na_rep="—",
-                         subset=[c for c in piv.columns if c != "class"]),
-        width="stretch",
-    )
-
-# --------------------------------------------------------------------------- #
-# Crop × model at one horizon
-# --------------------------------------------------------------------------- #
-divider("Crop × model at one horizon")
-fc1, fc2 = st.columns([1, 1])
-horizon_choices = (sorted([h for h in df["horizon"].unique() if h != "full"],
-                          key=lambda c: int(c[2:-1]))
-                   + (["full"] if "full" in set(df["horizon"]) else []))
-with fc1:
-    sel_horizon = st.selectbox("Horizon", horizon_choices, index=0,
-                               key="matrix_horizon")
-with fc2:
-    _choices = (["skill vs null"] if clim_by_crop else []) + ["r2", "rmse", "mae"]
-    metric = st.selectbox("Cell value", _choices, index=0, key="matrix_metric")
-
-mh = df[df["horizon"] == sel_horizon].copy()
-if mh.empty:
-    st.info("No rows at this horizon.")
-else:
-    mh["skill vs null"] = mh["r2"] - mh["crop"].map(clim_by_crop)
-    order = [m for m in MODEL_ORDER if m in set(mh["model"])]
-    mat = (mh.pivot(index="crop", columns="model", values=metric)
-             .reindex(columns=order))
-    higher_is_better = metric in ("r2", "skill vs null")
-    mat = mat.assign(__k__=mat.mean(axis=1)).sort_values(
-        "__k__", ascending=not higher_is_better).drop(columns="__k__")
-
-    if metric == "skill vs null" and clim_by_crop:
-        lim = float(np.nanmax(np.abs(mat.to_numpy()))) or 1.0
-        styled = (mat.style.format("{:+.3f}", na_rep="—")
-                     .background_gradient(cmap="RdBu", vmin=-lim, vmax=lim))
-    elif metric == "r2":
-        styled = (mat.style.format("{:.3f}", na_rep="—")
-                     .background_gradient(cmap="RdBu", vmin=-0.7, vmax=0.7))
-    else:
-        styled = (mat.style.format("{:.2f}", na_rep="—")
-                     .background_gradient(cmap="RdBu_r"))
-    st.dataframe(styled, width="stretch")
+if coverage_gaps:
     st.caption(
-        f"Transformers: {', '.join(m for m in order if m in TRANSFORMERS) or '—'}. "
-        f"Baselines: {', '.join(m for m in order if m in BASELINES) or '—'}."
-        + ("" if metric != "skill vs null" else
-           " Positive = beats the climatology reference for that crop.")
+        "Not every architecture is evaluated at in-season horizons — "
+        + "; ".join(coverage_gaps)
+        + ". Those models are excluded rather than drawn as blanks; see "
+          "Provenance."
     )
-
-    # Winner per crop, with the margin that makes the win meaningful or not.
-    st.markdown("##### Leading model per crop at this horizon")
-    best_rows = []
-    for crop, g in mh.groupby("crop"):
-        g = g.sort_values("r2", ascending=False).reset_index(drop=True)
-        margin = (float(g.at[0, "r2"] - g.at[1, "r2"]) if len(g) > 1
-                  else float("nan"))
-        best_rows.append({
-            "Crop": crop, "Model": g.at[0, "model"],
-            "Class": model_class(g.at[0, "model"]),
-            "R²": float(g.at[0, "r2"]),
-            "Climatology R²": clim_by_crop.get(crop, float("nan")),
-            "Skill vs null": float(g.at[0, "skill vs null"]),
-            "Margin over next": margin,
-            "Runner-up": g.at[1, "model"] if len(g) > 1 else "—",
-            "n": int(g.at[0, "n"]),
-        })
-    best = pd.DataFrame(best_rows)
-    best = best.sort_values("Skill vs null" if clim_by_crop else "R²",
-                            ascending=False)
-    if not clim_by_crop:
-        best = best.drop(columns=["Climatology R²", "Skill vs null"])
-
-    def _tie_flag(v):
-        if not isinstance(v, (int, float)) or v != v:
-            return ""
-        return "background-color: rgba(227,73,72,0.18)" if v < 0.01 else ""
-
-    def _skill_ink(v):
-        if not isinstance(v, (int, float)) or v != v:
-            return ""
-        return "color: #2a78d6" if v > 0 else "color: #e34948"
-
-    styler = (best.style
-                  .format({"R²": "{:.3f}", "Climatology R²": "{:.3f}",
-                           "Skill vs null": "{:+.3f}",
-                           "Margin over next": "{:.3f}"}, na_rep="—")
-                  .map(_tie_flag, subset=["Margin over next"]))
-    if clim_by_crop:
-        styler = styler.map(_skill_ink, subset=["Skill vs null"])
-    st.dataframe(styler, width="stretch", hide_index=True)
-
-    n_ties = int((best["Margin over next"] < 0.01).sum())
-    note = (f"Highlighted margins are below 0.01 R² ({n_ties} of {len(best)} "
-            f"crops) — inside run-to-run noise, so the leader is a tie rather "
-            f"than a winner.")
-    if clim_by_crop:
-        note += (f" {int((best['Skill vs null'] > 0).sum())} of {len(best)} "
-                 f"leaders beat the climatology reference.")
-    st.caption(note)
 
 st.markdown("---")
-st.caption(
-    "Sources: `results/metrics/multicrop_horizons.csv` "
-    "(`python scripts/05c_eval_horizons.py`) and "
-    "`results/metrics/climatology_baseline.csv`."
-)
+
+# --------------------------------------------------------------------------- #
+# Secondary — collapsed by default. Nothing here is deleted, only folded away.
+# --------------------------------------------------------------------------- #
+with st.expander(f"Numbers behind the curve — {sel_crop}", expanded=False):
+    # Also the accessible fallback for the low-contrast categorical slots.
+    if sub.empty:
+        st.caption("No horizon rows for this crop.")
+    else:
+        piv = (sub.pivot(index="model", columns="horizon", values="r2")
+                  .reindex(index=[m for m in MODEL_ORDER
+                                  if m in set(sub["model"])]))
+        cols = sorted([c for c in piv.columns if c.startswith("h-")],
+                      key=lambda c: int(c[2:-1]))
+        if "full" in piv.columns:
+            cols.append("full")
+        piv = piv[cols]
+        piv.insert(0, "class", [model_class(m) for m in piv.index])
+        if sel_crop in clim_by_crop:
+            piv.insert(1, "climatology (null)", clim_by_crop[sel_crop])
+        st.dataframe(
+            piv.style.format("{:.3f}", na_rep="—",
+                             subset=[c for c in piv.columns if c != "class"]),
+            width="stretch",
+        )
+
+with st.expander("Crop × model at one horizon", expanded=False):
+    fc1, fc2 = st.columns([1, 1])
+    horizon_choices = (sorted([h for h in df["horizon"].unique() if h != "full"],
+                              key=lambda c: int(c[2:-1]))
+                       + (["full"] if "full" in set(df["horizon"]) else []))
+    with fc1:
+        sel_horizon = st.selectbox("Horizon", horizon_choices, index=0,
+                                   key="matrix_horizon")
+    with fc2:
+        _choices = ((["skill vs null"] if clim_by_crop else [])
+                    + ["r2", "rmse", "mae"])
+        metric = st.selectbox("Cell value", _choices, index=0,
+                              key="matrix_metric")
+
+    mh = df[df["horizon"] == sel_horizon].copy()
+    if mh.empty:
+        st.info("No rows at this horizon.")
+    else:
+        mh["skill vs null"] = mh["r2"] - mh["crop"].map(clim_by_crop)
+        order = [m for m in MODEL_ORDER if m in set(mh["model"])]
+        mat = (mh.pivot(index="crop", columns="model", values=metric)
+                 .reindex(columns=order))
+        higher_is_better = metric in ("r2", "skill vs null")
+        mat = mat.assign(__k__=mat.mean(axis=1)).sort_values(
+            "__k__", ascending=not higher_is_better).drop(columns="__k__")
+
+        if metric == "skill vs null" and clim_by_crop:
+            lim = float(np.nanmax(np.abs(mat.to_numpy()))) or 1.0
+            styled = (mat.style.format("{:+.3f}", na_rep="—")
+                         .background_gradient(cmap="RdBu", vmin=-lim, vmax=lim))
+        elif metric == "r2":
+            styled = (mat.style.format("{:.3f}", na_rep="—")
+                         .background_gradient(cmap="RdBu", vmin=-0.7, vmax=0.7))
+        else:
+            styled = (mat.style.format("{:.2f}", na_rep="—")
+                         .background_gradient(cmap="RdBu_r"))
+        st.dataframe(styled, width="stretch")
+        st.caption(
+            f"Transformers: "
+            f"{', '.join(m for m in order if m in TRANSFORMERS) or '—'}. "
+            f"Baselines: "
+            f"{', '.join(m for m in order if m in BASELINES) or '—'}."
+            + ("" if metric != "skill vs null" else
+               " Positive = beats the climatology reference for that crop.")
+        )
+
+        # Winner per crop, with the margin that makes the win meaningful or not.
+        st.markdown("##### Leading model per crop at this horizon")
+        best_rows = []
+        for crop, g in mh.groupby("crop"):
+            g = g.sort_values("r2", ascending=False).reset_index(drop=True)
+            margin = (float(g.at[0, "r2"] - g.at[1, "r2"]) if len(g) > 1
+                      else float("nan"))
+            best_rows.append({
+                "Crop": crop, "Model": g.at[0, "model"],
+                "Class": model_class(g.at[0, "model"]),
+                "R²": float(g.at[0, "r2"]),
+                "Climatology R²": clim_by_crop.get(crop, float("nan")),
+                "Skill vs null": float(g.at[0, "skill vs null"]),
+                "Margin over next": margin,
+                "Runner-up": g.at[1, "model"] if len(g) > 1 else "—",
+                "n": int(g.at[0, "n"]),
+            })
+        best = pd.DataFrame(best_rows)
+        best = best.sort_values("Skill vs null" if clim_by_crop else "R²",
+                                ascending=False)
+        if not clim_by_crop:
+            best = best.drop(columns=["Climatology R²", "Skill vs null"])
+
+        def _tie_flag(v):
+            if not isinstance(v, (int, float)) or v != v:
+                return ""
+            return "background-color: rgba(227,73,72,0.18)" if v < 0.01 else ""
+
+        def _skill_ink(v):
+            if not isinstance(v, (int, float)) or v != v:
+                return ""
+            return "color: #2a78d6" if v > 0 else "color: #e34948"
+
+        styler = (best.style
+                      .format({"R²": "{:.3f}", "Climatology R²": "{:.3f}",
+                               "Skill vs null": "{:+.3f}",
+                               "Margin over next": "{:.3f}"}, na_rep="—")
+                      .map(_tie_flag, subset=["Margin over next"]))
+        if clim_by_crop:
+            styler = styler.map(_skill_ink, subset=["Skill vs null"])
+        st.dataframe(styler, width="stretch", hide_index=True)
+
+        n_ties = int((best["Margin over next"] < 0.01).sum())
+        note = (f"Highlighted margins are below 0.01 R² ({n_ties} of "
+                f"{len(best)} crops) — inside run-to-run noise, so the leader "
+                f"is a tie rather than a winner.")
+        if clim_by_crop:
+            note += (f" {int((best['Skill vs null'] > 0).sum())} of "
+                     f"{len(best)} leaders beat the climatology reference.")
+        st.caption(note)
+
+with st.expander("Provenance and coverage", expanded=False):
+    prov = pd.DataFrame([
+        {"Artefact": "horizon metrics", "File": HORIZONS_CSV.name,
+         "Written": _dt.datetime.fromtimestamp(_h_mtime).strftime(_fmt)},
+        {"Artefact": "climatology reference", "File": CLIMATOLOGY_CSV.name,
+         "Written": (_dt.datetime.fromtimestamp(CLIMATOLOGY_CSV.stat().st_mtime)
+                     .strftime(_fmt) if CLIMATOLOGY_CSV.exists() else "missing")},
+        {"Artefact": "newest model checkpoint",
+         "File": "results/checkpoints/*.pt",
+         "Written": (_dt.datetime.fromtimestamp(_ckpt).strftime(_fmt)
+                     if _ckpt else "none")},
+    ])
+    st.dataframe(prov, hide_index=True, width="stretch")
+
+    if coverage_gaps:
+        st.markdown("##### Coverage")
+        st.caption(
+            "Not every architecture is evaluated at in-season horizons — "
+            + "; ".join(coverage_gaps)
+            + ". Those models are excluded above rather than drawn as blanks."
+        )
+
+    if not cmp_df.empty:
+        st.markdown(
+            f"##### Disagreement with the current per-crop evaluation "
+            f"({len(cmp_df)} shared (model, crop) pairs, "
+            f"max |Δ R²| = {cmp_df['Δ R²'].abs().max():.3f})"
+        )
+        st.caption(
+            "Same models, same crops, no in-season cutoff on either side. "
+            "`multicrop_summary.csv` is the current evaluation; the "
+            "`n` columns differ too, so the two files do not even score "
+            "the same test population."
+        )
+        st.dataframe(
+            cmp_df.sort_values("Δ R²", key=abs, ascending=False)
+                  .rename(columns={"r2_horizons": "R² (horizons file)",
+                                   "r2_current": "R² (current eval)",
+                                   "n_horizons": "n (horizons file)",
+                                   "n_current": "n (current eval)"})
+                  .style.format({"R² (horizons file)": "{:.3f}",
+                                 "R² (current eval)": "{:.3f}",
+                                 "Δ R²": "{:+.3f}"}),
+            width="stretch", hide_index=True,
+        )
+
+    st.caption(
+        "Sources: `results/metrics/multicrop_horizons.csv` "
+        "(`python scripts/05c_eval_horizons.py`) and "
+        "`results/metrics/climatology_baseline.csv`."
+    )

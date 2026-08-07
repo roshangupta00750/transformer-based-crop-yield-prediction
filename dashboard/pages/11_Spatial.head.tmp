@@ -1,0 +1,458 @@
+"""Spatial view — where in Germany is the prediction good or bad?
+
+One question, one map. The overlay selector chooses what the single NUTS-3
+choropleth encodes; a four-metric KPI row summarises it. Ranked districts,
+the pooled variance-explained figure, the per-district-R² diagnostic, the
+leave-one-Landkreis-out study and the per-district yield history are all
+still here, one click away inside collapsed expanders.
+
+Merges the former `11_Spatial.py` (per-district skill + LOO XGBoost) and
+`18_Geographic.py` (actual / predicted / residual choropleth). Both pages
+carried a byte-identical `_load_polygons()` and rendered the same shapefile,
+so they are unified here behind one overlay selector.
+
+On the deliberate absence of per-district R²
+--------------------------------------------
+`results/metrics/spatial_per_district.csv` scores every district on the two
+test years, so every one of its 8,948 rows has n=2. At n=2 the R² denominator
+collapses to (y1 - y2)^2 / 2 — the squared gap between two harvests, which is
+a noise term, not a variance estimate. When two consecutive years happen to
+yield alike the denominator approaches zero and R² diverges: 69.9% of rows sit
+below -1 and the floor is -1.4e7.
+
+The ranking that produces is not merely noisy, it is misleading. R² and RMSE
+come out of the same folds, so a district genuinely predicted badly should rank
+badly on both — but across all 60 model-crop pairs the ten districts with the
+worst R² sit at the 58th RMSE percentile on median, and for pairs such as
+dlinear x oats at the 26th. Concretely, xgboost x winter_wheat puts DEG0P third
+worst in the country at R² = -1521 while its RMSE sits at the 35th percentile:
+a district predicted better than 65% of its peers. So per-district R² is not
+mapped, not ranked, and not shown as a KPI here.
+
+What replaces it:
+  * Per-district overlays and tables use RMSE / MAE, which are well defined
+    at any n and stay in dt/ha.
+  * Variance-explained is reported once, pooled across districts (N ~ 430
+    district-years), where the denominator is a real yield variance.
+  * The raw per-district R² survives only inside a collapsed diagnostic whose
+    purpose is to show why it cannot be used.
+
+Data sources:
+  data/processed/dataset.parquet          actual yields
+  results/metrics/spatial_per_district.csv  per-district RMSE/MAE, 6 models
+  results/metrics/loo_xgboost.csv           leave-one-Landkreis-out folds
+  data/raw/geo/NUTS_RG_01M_2021_4326_LEVL_3.shp
+"""
+from __future__ import annotations
+
+import sys
+from datetime import datetime
+from pathlib import Path
+
+import folium
+import geopandas as gpd
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import streamlit as st
+from branca.colormap import LinearColormap
+from streamlit_folium import st_folium
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _model_template import _predict_test_set
+from utils import (CHECKPOINTS_DIR, METRICS_DIR, MODELS, PROCESSED,
+                   PROJECT_ROOT, kpi, landkreis_name_map,
+                   load_climatology_baseline, page_header)
+
+st.set_page_config(page_title="Spatial — Crop Yield", layout="wide")
+page_header(
+    "Spatial view",
+    "Where in Germany is the prediction good or bad?",
+)
+
+# Colour used for districts that carry no yield series at all, and for those
+# that do but have no value under the current selection. Both must be
+# unmistakably different from every colormap value below.
+C_OUTSIDE = "#f2f2f2"   # not in the district panel at all
+C_NOVALUE = "#8a8a8a"   # in the panel, nothing to show for this selection
+
+
+# --------------------------------------------------------------------------- #
+# Cached loaders
+# --------------------------------------------------------------------------- #
+@st.cache_data(ttl=3600)
+def _load_polygons() -> gpd.GeoDataFrame:
+    """401 German NUTS-3 polygons, lightly simplified (halves the GeoJSON)."""
+    shp = PROJECT_ROOT / "data" / "raw" / "geo" / "NUTS_RG_01M_2021_4326_LEVL_3.shp"
+    if not shp.exists():
+        return gpd.GeoDataFrame(columns=["landkreis", "name", "geometry"],
+                                geometry="geometry", crs="EPSG:4326")
+    g = gpd.read_file(shp)
+    g = g[g["CNTR_CODE"] == "DE"][["NUTS_ID", "NUTS_NAME", "geometry"]].copy()
+    g["geometry"] = g.geometry.simplify(0.003, preserve_topology=True)
+    return g.rename(columns={"NUTS_ID": "landkreis", "NUTS_NAME": "name"})
+
+
+@st.cache_data(ttl=3600)
+def _yield_panel() -> pd.DataFrame:
+    """One row per (crop, landkreis, year).
+
+    The processed parquet is daily (57 MB, ~16 M rows); the map only ever needs
+    the annual yield, so collapse once and cache rather than re-grouping the
+    daily frame on every widget change.
+    """
+    if not PROCESSED.exists():
+        return pd.DataFrame(columns=["crop", "landkreis", "year", "yield_dt_per_ha"])
+    df = pd.read_parquet(
+        PROCESSED, columns=["landkreis", "year", "crop", "yield_dt_per_ha"])
+    return (df.groupby(["crop", "landkreis", "year"], observed=True)
+              ["yield_dt_per_ha"].first().reset_index())
+
+
+@st.cache_data(ttl=600)
+def _per_district() -> pd.DataFrame:
+    p = METRICS_DIR / "spatial_per_district.csv"
+    return pd.read_csv(p) if p.exists() else pd.DataFrame()
+
+
+@st.cache_data(ttl=600)
+def _loo() -> pd.DataFrame:
+    p = METRICS_DIR / "loo_xgboost.csv"
+    return pd.read_csv(p) if p.exists() else pd.DataFrame()
+
+
+@st.cache_data(ttl=900, show_spinner="Running model forward pass…")
+def _predictions(model: str, crop: str) -> tuple[pd.DataFrame, str | None]:
+    """Cached wrapper around the shared predictor.
+
+    `_model_template._predict_test_set` carries no cache of its own, so an
+    uncached call re-ran a full forward pass (~35 s for xgboost) on every
+    widget interaction.
+    """
+    preds, err = _predict_test_set(model, crop)
+    return preds, (err["error"] if err else None)
+
+
+@st.cache_data(ttl=3600)
+def _test_years() -> list[int]:
+    """The test split, always read from configs/data.yaml.
+
+    Deliberately has no literal fallback. A hardcoded {2022, 2023} is what made
+    the prediction and residual overlays unreachable once the config moved to
+    [2024, 2025]; a fallback would silently recreate that. If the config cannot
+    be read the page says so instead of guessing.
+    """
+    from src.utils import load_data_config
+    return [int(y) for y in load_data_config()["splits"]["temporal"]["test_years"]]
+
+
+@st.cache_data(ttl=600)
+def _pooled_r2(model: str, crop: str, years: tuple[int, ...]) -> dict | None:
+    """Variance explained over the pooled district-year sample.
+
+    Per-district R² is undefined at n=2; pooling restores a denominator that is
+    an actual yield variance. SSE is reconstructed exactly from the per-district
+    RMSE (SSEᵢ = nᵢ·RMSEᵢ²), and districts are kept only where the panel truth
+    count matches the metric's n, so numerator and denominator cover identical
+    observations.
+    """
+    metrics, pnl = _per_district(), _yield_panel()
+    if metrics.empty or pnl.empty:
+        return None
+    s = metrics[(metrics["model"] == model) & (metrics["crop"] == crop)]
+    if s.empty:
+        return None
+    truth = (pnl[(pnl["crop"] == crop) & (pnl["year"].isin(years))]
+             .dropna(subset=["yield_dt_per_ha"]))
+    cnt = truth.groupby("landkreis").size().rename("n_truth")
+    s = s.merge(cnt, on="landkreis", how="left")
+    s = s[s["n_truth"] == s["n"]]
+    if s.empty:
+        return None
+    t = truth[truth["landkreis"].isin(set(s["landkreis"]))]["yield_dt_per_ha"]
+    sse = float((s["n"] * s["rmse"] ** 2).sum())
+    sst = float(((t - t.mean()) ** 2).sum())
+    n_obs = int(s["n"].sum())
+    if sst <= 0 or n_obs != len(t):
+        return None
+    return {"r2": 1 - sse / sst, "rmse": float(np.sqrt(sse / n_obs)),
+            "n_obs": n_obs, "n_districts": int(len(s))}
+
+
+polys = _load_polygons()
+if polys.empty:
+    st.error("NUTS-3 shapefile missing. Run `scripts/00_build_geo.py`.")
+    st.stop()
+
+panel = _yield_panel()
+pd_df = _per_district()
+loo_df = _loo()
+name_map = landkreis_name_map()
+try:
+    test_years = _test_years()
+except Exception as e:  # noqa: BLE001
+    st.error(f"Cannot read the test split from `configs/data.yaml`: {e}")
+    st.stop()
+
+panel_districts = set(panel["landkreis"].unique()) if not panel.empty else set()
+
+# --------------------------------------------------------------------------- #
+# Controls
+# --------------------------------------------------------------------------- #
+OVERLAYS = [
+    "Actual yield",
+    "Model prediction",
+    "Residual (pred − actual)",
+    "Test RMSE per district",
+    "Test MAE per district",
+    "LOO RMSE (XGBoost)",
+    "LOO RMSE penalty (LOO − in-training)",
+]
+NEEDS_PRED = {"Model prediction", "Residual (pred − actual)"}
+NEEDS_YEAR = {"Actual yield"} | NEEDS_PRED
+NEEDS_METRICS = {"Test RMSE per district", "Test MAE per district"}
+NEEDS_LOO = {"LOO RMSE (XGBoost)", "LOO RMSE penalty (LOO − in-training)"}
+NEEDS_MODEL = NEEDS_PRED | NEEDS_METRICS
+
+crops = sorted(panel["crop"].unique().tolist()) if not panel.empty else ["winter_wheat"]
+
+c1, c2, c3, c4 = st.columns([1.5, 1, 1, 1])
+with c1:
+    overlay = st.selectbox("Overlay", OVERLAYS, key="sp_overlay")
+with c2:
+    crop = st.selectbox(
+        "Crop", crops,
+        index=crops.index("winter_wheat") if "winter_wheat" in crops else 0,
+        key="sp_crop")
+with c3:
+    if overlay in NEEDS_MODEL:
+        avail = [m for m in MODELS
+                 if (CHECKPOINTS_DIR / f"{m}.pipeline.json").exists()] or list(MODELS)
+        if overlay in NEEDS_METRICS and not pd_df.empty:
+            avail = [m for m in avail if m in set(pd_df["model"].unique())] or avail
+        model = st.selectbox("Model", avail,
+                             index=avail.index("xgboost") if "xgboost" in avail else 0,
+                             key="sp_model")
+    else:
+        model = "xgboost"
+        st.selectbox("Model", ["— not used by this overlay —"], disabled=True,
+                     key="sp_model_off")
+with c4:
+    if overlay in NEEDS_YEAR:
+        # Prediction and residual exist only on the test split. Offering just
+        # those years makes the old unreachable-overlay failure structurally
+        # impossible rather than warning about it after the fact.
+        yrs = (sorted(y for y in panel["year"].unique()) if not panel.empty else [])
+        opts = [y for y in yrs if y in set(test_years)] if overlay in NEEDS_PRED else yrs
+        opts = opts or list(test_years)
+        year = st.select_slider("Year", opts, value=opts[-1], key="sp_year")
+    else:
+        year = None
+        _tw = f"test window {'–'.join(map(str, test_years))}"
+        st.select_slider("Year", [_tw], value=_tw, disabled=True,
+                         key="sp_year_off")
+
+# --------------------------------------------------------------------------- #
+# Staleness — fires only for the overlays that actually read a metric CSV, so
+# the default "Actual yield" view (which reads the parquet, not the metrics)
+# stays clean. A firing warning is never collapsed.
+# --------------------------------------------------------------------------- #
+PER_DISTRICT_CSV = METRICS_DIR / "spatial_per_district.csv"
+LOO_CSV = METRICS_DIR / "loo_xgboost.csv"
+
+
+def _stale_against_checkpoints(*paths: Path) -> list[tuple[Path, float]]:
+    """Metric files older than the newest checkpoint on disk."""
+    ckpts = [*CHECKPOINTS_DIR.glob("*.pt"), *CHECKPOINTS_DIR.glob("*.ubj")]
+    if not ckpts:
+        return []
+    newest_mt = max(p.stat().st_mtime for p in ckpts)
+    return [(p, p.stat().st_mtime) for p in paths
+            if p.exists() and p.stat().st_mtime < newest_mt]
+
+
+_sources_used: list[Path] = []
+if overlay in NEEDS_METRICS:
+    _sources_used.append(PER_DISTRICT_CSV)
+if overlay in NEEDS_LOO:
+    _sources_used += [LOO_CSV, PER_DISTRICT_CSV]
+_stale_now = _stale_against_checkpoints(*dict.fromkeys(_sources_used))
+if _stale_now:
+    _ck = [*CHECKPOINTS_DIR.glob("*.pt"), *CHECKPOINTS_DIR.glob("*.ubj")]
+    _newest = max(_ck, key=lambda p: p.stat().st_mtime)
+    _nmt = _newest.stat().st_mtime
+    st.warning(
+        "**Stale — this overlay is not from the models currently on disk.** "
+        f"Newest checkpoint `{_newest.name}` is "
+        f"{datetime.fromtimestamp(_nmt):%Y-%m-%d %H:%M}:\n\n"
+        + "\n".join(
+            f"- `{p.name}` — {datetime.fromtimestamp(mt):%Y-%m-%d %H:%M}, "
+            f"{(_nmt - mt) / 86400:.1f} days older"
+            for p, mt in _stale_now)
+        + "\n\nRegenerate with `python scripts/06_spatial_eval.py` / "
+          "`python scripts/06b_loo_xgboost.py`."
+    )
+
+# --------------------------------------------------------------------------- #
+# Resolve the overlay to a per-district value column
+# --------------------------------------------------------------------------- #
+values = pd.DataFrame(columns=["landkreis", "value"])
+extra: pd.DataFrame | None = None      # optional tooltip / table columns
+label = ""
+unit = "dt/ha"
+diverging = False
+higher_is_worse = False
+err_msg: str | None = None
+
+if overlay == "Actual yield":
+    values = (panel[(panel["crop"] == crop) & (panel["year"] == year)]
+              [["landkreis", "yield_dt_per_ha"]]
+              .rename(columns={"yield_dt_per_ha": "value"}))
+    label = f"Actual yield — {crop}, {year}"
+
+elif overlay in NEEDS_PRED:
+    preds, err_msg = _predictions(model, crop)
+    if not err_msg and not preds.empty:
+        sub = preds[preds["year"] == year]
+        col = "y_pred" if overlay == "Model prediction" else "residual"
+        values = (sub.groupby("landkreis")[col].first().reset_index()
+                  .rename(columns={col: "value"}))
+        extra = (sub.groupby("landkreis")[["y_true", "y_pred"]].first()
+                 .reset_index())
+        diverging = overlay.startswith("Residual")
+        kind = "prediction" if overlay == "Model prediction" else "residual"
+        label = f"{model.upper()} {kind} — {crop}, {year}"
+
+elif overlay in NEEDS_METRICS:
+    col = "rmse" if "RMSE" in overlay else "mae"
+    sub = pd_df[(pd_df["model"] == model) & (pd_df["crop"] == crop)] \
+        if not pd_df.empty else pd.DataFrame()
+    if not sub.empty:
+        values = sub[["landkreis", col]].rename(columns={col: "value"})
+        extra = sub[["landkreis", "rmse", "mae", "n"]]
+        higher_is_worse = True
+        label = f"{model.upper()} test {col.upper()} — {crop}, {'/'.join(map(str, test_years))}"
+
+elif overlay in NEEDS_LOO:
+    lsub = loo_df[loo_df["crop"] == crop] if not loo_df.empty else pd.DataFrame()
+    if not lsub.empty:
+        base = pd_df[(pd_df["model"] == "xgboost") & (pd_df["crop"] == crop)] \
+            if not pd_df.empty else pd.DataFrame()
+        merged = lsub[["landkreis", "rmse", "mae", "n"]].rename(
+            columns={"rmse": "rmse_loo", "mae": "mae_loo"})
+        if not base.empty:
+            merged = merged.merge(base[["landkreis", "rmse"]].rename(
+                columns={"rmse": "rmse_in_train"}), on="landkreis", how="left")
+            merged["penalty"] = merged["rmse_loo"] - merged["rmse_in_train"]
+        else:
+            merged["rmse_in_train"] = np.nan
+            merged["penalty"] = np.nan
+        col = "rmse_loo" if overlay == "LOO RMSE (XGBoost)" else "penalty"
+        values = merged[["landkreis", col]].rename(columns={col: "value"})
+        extra = merged
+        diverging = col == "penalty"
+        higher_is_worse = True
+        label = ("XGBoost LOO RMSE" if col == "rmse_loo"
+                 else "XGBoost LOO RMSE penalty (positive = worse held out)")
+        label += f" — {crop}"
+
+values = values.dropna(subset=["value"]) if not values.empty else values
+
+# --------------------------------------------------------------------------- #
+# Map
+# --------------------------------------------------------------------------- #
+if err_msg:
+    st.error(f"{model.upper()}: {err_msg}")
+elif values.empty:
+    st.info(f"No data for this overlay under {crop}"
+            + (f" x {model}" if overlay in NEEDS_MODEL else "") + ".")
+
+joined = polys.merge(values, on="landkreis", how="left")
+if extra is not None and not extra.empty:
+    joined = joined.merge(extra.drop(columns=["value"], errors="ignore"),
+                          on="landkreis", how="left")
+
+# Three-way status so an absent district never reads as a low value.
+joined["status"] = np.where(
+    joined["value"].notna(), "scored",
+    np.where(joined["landkreis"].isin(panel_districts),
+             "panel_no_value", "outside_panel"))
+
+vals = joined["value"].dropna()
+if not vals.empty:
+    if diverging:
+        span = float(np.nanpercentile(np.abs(vals), 95)) or 1.0
+        vmin, vmax = -span, span
+        cmap = LinearColormap(["#2166ac", "#f7f7f7", "#b2182b"],
+                              vmin=vmin, vmax=vmax)
+    else:
+        vmin = float(np.nanpercentile(vals, 5))
+        vmax = float(np.nanpercentile(vals, 95))
+        if vmax <= vmin:
+            vmin, vmax = float(vals.min()), float(vals.min()) + 1e-6
+        palette = (["#ffffcc", "#fd8d3c", "#bd0026"] if higher_is_worse
+                   else ["#f7fcb9", "#78c679", "#005a32"])
+        cmap = LinearColormap(palette, vmin=vmin, vmax=vmax)
+    cmap.caption = f"{label} [{unit}]"
+
+    def _hex(v: float) -> str:
+        return cmap.rgb_hex_str(float(np.clip(v, vmin, vmax)))
+
+    joined["_color"] = [
+        _hex(v) if pd.notna(v) else (C_NOVALUE if s == "panel_no_value" else C_OUTSIDE)
+        for v, s in zip(joined["value"], joined["status"])
+    ]
+else:
+    cmap = None
+    joined["_color"] = np.where(joined["status"] == "panel_no_value",
+                                C_NOVALUE, C_OUTSIDE)
+
+# Map frame is string-formatted for display; `joined` stays numeric for tables.
+geo = joined.copy()
+geo["value_txt"] = [f"{v:,.2f} {unit}" if pd.notna(v) else
+                    ("no value for this selection" if s == "panel_no_value"
+                     else f"outside the {len(panel_districts)}-district panel")
+                    for v, s in zip(geo["value"], geo["status"])]
+
+tip_fields = ["name", "landkreis", "value_txt"]
+tip_alias = ["District", "NUTS-3", label.split("—")[0].strip() or "Value"]
+for fld, alias in [("y_true", "Actual"), ("y_pred", "Predicted"),
+                   ("rmse", "RMSE"), ("mae", "MAE"),
+                   ("rmse_loo", "LOO RMSE"), ("rmse_in_train", "RMSE in training"),
+                   ("n", "n (test years)")]:
+    if fld in geo.columns and fld not in tip_fields:
+        # Render as text: a raw NaN reaches the tooltip as "null", which reads
+        # like a value of zero.
+        geo[fld] = [f"{v:,.2f}" if pd.notna(v) else "—" for v in geo[fld]]
+        tip_fields.append(fld)
+        tip_alias.append(alias)
+
+m = folium.Map(location=[51.1657, 10.4515], zoom_start=6, tiles="cartodbpositron")
+folium.GeoJson(
+    geo[tip_fields + ["_color", "status", "geometry"]].__geo_interface__,
+    style_function=lambda f: {
+        "fillColor": f["properties"]["_color"],
+        "color": "#4d4d4d" if f["properties"]["status"] == "outside_panel" else "white",
+        "weight": 0.8 if f["properties"]["status"] == "outside_panel" else 0.4,
+        "dashArray": "3,3" if f["properties"]["status"] == "outside_panel" else "0",
+        "fillOpacity": 0.35 if f["properties"]["status"] == "outside_panel" else 0.8,
+    },
+    highlight_function=lambda f: {"weight": 2.0, "color": "#222222"},
+    tooltip=folium.features.GeoJsonTooltip(
+        fields=tip_fields, aliases=tip_alias, localize=True, max_width=320),
+).add_to(m)
+if cmap is not None:
+    cmap.add_to(m)
+
+n_out = int((geo["status"] == "outside_panel").sum())
+n_nov = int((geo["status"] == "panel_no_value").sum())
+m.get_root().html.add_child(folium.Element(f"""
+<div style="position:fixed;bottom:18px;left:18px;z-index:9999;background:rgba(255,255,255,.92);
+ border:1px solid #bbb;border-radius:4px;padding:7px 10px;font:12px sans-serif;line-height:1.6">
+  <span style="display:inline-block;width:13px;height:13px;background:{C_NOVALUE};
+   border:1px solid #666;vertical-align:-2px"></span> No value for this selection ({n_nov})<br>
+  <span style="display:inline-block;width:13px;height:13px;background:{C_OUTSIDE};
+   border:1px dashed #4d4d4d;vertical-align:-2px"></span> Outside the panel ({n_out})
+</div>"""))
+st_folium(m, width=None, height=600, returned_objects=[])
+

@@ -1,10 +1,17 @@
-"""Climate counterfactual page — CMIP6 delta-method yield projections.
+"""Climate counterfactual — how much yield moves under CMIP6 warming?
+
+One question. The default view is the applied warming signal and the
+predicted response, side by side in a single KPI row, plus one chart: the
+per-crop yield delta under each scenario. The per-model table, the
+(crop x model) heatmap, the cross-model spread, the per-district
+distribution and the full methodology are all still here, collapsed.
 
 Reads ``results/metrics/counterfactual_daily_summary.csv`` and
-``counterfactual_daily_district.csv`` (from ``scripts/13_counterfactual_daily.py``).
-The script applies additive tasmax/tasmin deltas and multiplicative pr/rsds
-deltas to the 2024-25 observed daily features, then re-predicts with the
-existing daily-trained models.
+``counterfactual_daily_district.csv`` (from
+``scripts/13_counterfactual_daily.py``). The script applies additive
+tasmax/tasmin deltas and multiplicative pr/rsds deltas to the 2024-25
+observed daily features, then re-predicts with the existing daily-trained
+models.
 
 The rsds perturbation is INERT: feature policy v3 excludes
 ``radiation_global`` (see ``configs/data.yaml`` -> ``features.excluded``),
@@ -28,12 +35,15 @@ import plotly.express as px
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from utils import (CHECKPOINTS_DIR, METRICS_DIR, PROJECT_ROOT, divider, kpi,
-                   page_header)
+from utils import CHECKPOINTS_DIR, METRICS_DIR, PROJECT_ROOT, kpi, page_header
 
 
 def _stale_banner(*metric_paths: Path) -> None:
-    """Warn when a metric file predates the newest checkpoint on disk."""
+    """Warn when a metric file predates the newest checkpoint on disk.
+
+    Stays at the top of the page and outside every expander: a *firing*
+    staleness warning is the first thing a reader needs, not a detail.
+    """
     ckpts = [*CHECKPOINTS_DIR.glob("*.pt"), *CHECKPOINTS_DIR.glob("*.ubj")]
     if not ckpts:
         return
@@ -83,9 +93,8 @@ def _model_input_features() -> set[str]:
 st.set_page_config(page_title="Climate counterfactual — Crop Yield Benchmark",
                    layout="wide")
 page_header("Climate counterfactual (CMIP6 SSP2-4.5 / SSP5-8.5)",
-            "Delta-method: apply (SSP future window - historical baseline) "
-            "climate deltas to 2024-25 observed features, predict with the "
-            "existing daily-trained models.")
+            "How much predicted yield moves when CMIP6 climate deltas are "
+            "applied to the 2024-25 observed features?")
 
 summary_path = METRICS_DIR / "counterfactual_daily_summary.csv"
 district_path = METRICS_DIR / "counterfactual_daily_district.csv"
@@ -102,7 +111,8 @@ summary = pd.read_csv(summary_path)
 district = pd.read_csv(district_path) if district_path.exists() else pd.DataFrame()
 
 # --------------------------------------------------------------------------- #
-# What this experiment can and cannot show
+# Scope check — what this experiment can and cannot show. The full statement
+# lives in the Method expander; only a one-line pointer stays on screen.
 # --------------------------------------------------------------------------- #
 _excluded = _excluded_features()
 _model_feats = _model_input_features()
@@ -131,25 +141,12 @@ if _veg:
 if "humidity" in _model_feats:
     _limits.append("**Humidity is held constant** — no CMIP6 counterpart is "
                    "applied.")
-if _limits:
-    st.info("\n\n".join(_limits))
 
 # --------------------------------------------------------------------------- #
-# Headline KPIs
+# Physical-consistency check — a firing error is never collapsed.
 # --------------------------------------------------------------------------- #
-divider("Applied climate signal")
-
-deltas = summary.groupby("scenario")[
-    ["tasmax_delta_C", "pr_pct_delta"]].first()
-k1, k2, k3, k4 = st.columns(4)
-if "ssp2_4_5" in deltas.index:
-    d = deltas.loc["ssp2_4_5"]
-    with k1: kpi("SSP2-4.5 tasmax Δ", f"{d['tasmax_delta_C']:+.2f} °C")
-    with k2: kpi("SSP2-4.5 precip Δ", f"{d['pr_pct_delta']:+.1f} %")
-if "ssp5_8_5" in deltas.index:
-    d = deltas.loc["ssp5_8_5"]
-    with k3: kpi("SSP5-8.5 tasmax Δ", f"{d['tasmax_delta_C']:+.2f} °C")
-    with k4: kpi("SSP5-8.5 precip Δ", f"{d['pr_pct_delta']:+.1f} %")
+deltas = summary.groupby("scenario")[["tasmax_delta_C", "pr_pct_delta"]].first()
+response = summary.groupby("scenario")["delta_pct"].mean()
 
 if {"ssp2_4_5", "ssp5_8_5"} <= set(deltas.index):
     _t2 = float(deltas.loc["ssp2_4_5", "tasmax_delta_C"])
@@ -160,168 +157,222 @@ if {"ssp2_4_5", "ssp5_8_5"} <= set(deltas.index):
             f"less ({_t5:+.2f} °C) than SSP2-4.5 ({_t2:+.2f} °C) in this "
             "run. The high-forcing scenario must warm more, so the delta "
             "extraction in `scripts/13_counterfactual_daily.py` is suspect "
-            "and every per-scenario comparison below inherits the fault."
+            "and every per-scenario comparison on this page inherits the "
+            "fault."
         )
 
 # --------------------------------------------------------------------------- #
-# Per-crop mean predicted yield delta (across models)
+# PRIMARY 1 — applied signal and predicted response, one row
 # --------------------------------------------------------------------------- #
-divider("Per-crop predicted yield delta")
+k1, k2, k3, k4 = st.columns(4)
+if "ssp2_4_5" in deltas.index:
+    with k1:
+        kpi("SSP2-4.5 tasmax Δ",
+            f"{float(deltas.loc['ssp2_4_5', 'tasmax_delta_C']):+.2f} °C")
+    with k2:
+        kpi("SSP2-4.5 mean yield Δ",
+            f"{float(response.get('ssp2_4_5', float('nan'))):+.2f} %")
+if "ssp5_8_5" in deltas.index:
+    with k3:
+        kpi("SSP5-8.5 tasmax Δ",
+            f"{float(deltas.loc['ssp5_8_5', 'tasmax_delta_C']):+.2f} °C")
+    with k4:
+        kpi("SSP5-8.5 mean yield Δ",
+            f"{float(response.get('ssp5_8_5', float('nan'))):+.2f} %")
 
-crop_scenario = summary.pivot_table(
-    index="crop", columns="scenario", values="delta_pct", aggfunc="mean"
-).round(2)
-crop_scenario = crop_scenario.sort_values(
-    crop_scenario.columns[-1], ascending=False) if not crop_scenario.empty else crop_scenario
-
-st.dataframe(
-    crop_scenario.reset_index().rename(columns={"crop": "Crop"})
-        .style.format({c: "{:+.2f} %" for c in crop_scenario.columns}),
-    hide_index=True, width="stretch",
+st.caption(
+    f"Mean across {summary['model'].nunique()} models and "
+    f"{summary['crop'].nunique()} crops. "
+    + (f"{len(_limits)} scope limitation(s) apply to every number on this "
+       "page — see Method and limitations below."
+       if _limits else "No scope limitations detected against the current "
+                       "feature policy.")
 )
 
-# Bar chart
+# --------------------------------------------------------------------------- #
+# PRIMARY 2 — the one chart
+# --------------------------------------------------------------------------- #
+st.markdown("#### Predicted yield delta per crop")
+
 long = summary.groupby(["crop", "scenario"])["delta_pct"].mean().reset_index()
 fig = px.bar(
     long.sort_values("delta_pct"), x="delta_pct", y="crop",
     color="scenario", barmode="group", orientation="h",
-    labels={"delta_pct": "Predicted yield delta (%)", "crop": ""},
-    title=f"Predicted yield change per crop, mean across "
-          f"{summary['model'].nunique()} models",
+    labels={"delta_pct": "Predicted yield delta (%)", "crop": "",
+            "scenario": "Scenario"},
 )
 fig.add_vline(x=0, line_dash="dot", line_color="grey")
-fig.update_layout(height=440)
+fig.update_layout(height=460, margin=dict(l=10, r=10, t=30, b=10))
 st.plotly_chart(fig, width="stretch")
+st.caption("Mean across models. Source: `counterfactual_daily_summary.csv`.")
 
 # --------------------------------------------------------------------------- #
-# Per-model behavior — where the disagreement is
+# SECONDARY — per-crop and per-model breakdown
 # --------------------------------------------------------------------------- #
-divider("Per-model response — cross-model divergence is itself the signal")
+with st.expander("Per-crop and per-model detail", expanded=False):
+    crop_scenario = summary.pivot_table(
+        index="crop", columns="scenario", values="delta_pct", aggfunc="mean"
+    ).round(2)
+    if not crop_scenario.empty:
+        crop_scenario = crop_scenario.sort_values(
+            crop_scenario.columns[-1], ascending=False)
 
+    st.markdown("##### Per-crop mean delta (the table behind the chart above)")
+    st.dataframe(
+        crop_scenario.reset_index().rename(columns={"crop": "Crop"})
+            .style.format({c: "{:+.2f} %" for c in crop_scenario.columns}),
+        hide_index=True, width="stretch",
+    )
 
-model_pivot = summary.pivot_table(
-    index="model", columns="scenario", values="delta_pct", aggfunc="mean"
-).round(2)
-st.dataframe(
-    model_pivot.reset_index().rename(columns={"model": "Model"})
-        .style.format({c: "{:+.2f} %" for c in model_pivot.columns}),
-    hide_index=True, width="stretch",
-)
+    st.markdown("##### Per-model response — cross-model divergence is itself "
+                "the signal")
+    model_pivot = summary.pivot_table(
+        index="model", columns="scenario", values="delta_pct", aggfunc="mean"
+    ).round(2)
+    st.dataframe(
+        model_pivot.reset_index().rename(columns={"model": "Model"})
+            .style.format({c: "{:+.2f} %" for c in model_pivot.columns}),
+        hide_index=True, width="stretch",
+    )
 
-# Heatmap: model × crop for one scenario
-sel_scenario = st.selectbox(
-    "Scenario for detailed view",
-    sorted(summary["scenario"].unique()),
-    index=(sorted(summary["scenario"].unique()).index("ssp5_8_5")
-           if "ssp5_8_5" in summary["scenario"].unique() else 0),
-    key="cf_scenario",
-)
-mc = summary[summary["scenario"] == sel_scenario].pivot(
-    index="crop", columns="model", values="delta_pct")
+    scenarios = sorted(summary["scenario"].unique())
+    sel_scenario = st.selectbox(
+        "Scenario for the detailed views below", scenarios,
+        index=scenarios.index("ssp5_8_5") if "ssp5_8_5" in scenarios else 0,
+        key="cf_scenario",
+    )
+    mc = summary[summary["scenario"] == sel_scenario].pivot(
+        index="crop", columns="model", values="delta_pct")
+    fig = px.imshow(
+        mc, color_continuous_scale="RdYlGn",
+        color_continuous_midpoint=0, aspect="auto", text_auto=".2f",
+        labels=dict(x="Model", y="Crop", color="Yield Δ (%)"),
+        title=f"Yield Δ per (crop, model) — {sel_scenario}",
+    )
+    fig.update_layout(height=440)
+    st.plotly_chart(fig, width="stretch")
 
-fig = px.imshow(
-    mc, color_continuous_scale="RdYlGn",
-    color_continuous_midpoint=0, aspect="auto", text_auto=".2f",
-    labels=dict(x="Model", y="Crop", color="Yield Δ (%)"),
-    title=f"Yield Δ per (crop, model) — {sel_scenario}",
-)
-fig.update_layout(height=440)
-st.plotly_chart(fig, width="stretch")
-
-# Cross-model spread as OOD-uncertainty proxy
-divider("Cross-model spread as OOD-uncertainty signal")
-
-spread = summary[summary["scenario"] == sel_scenario].groupby("crop")[
-    "delta_pct"].agg(["mean", "std", "min", "max", "count"])
-spread.columns = ["Mean Δ%", "Std across models", "Min", "Max", "# models"]
-spread = spread.sort_values("Std across models", ascending=False)
-
-st.dataframe(
-    spread.reset_index().rename(columns={"crop": "Crop"})
-        .style.format({"Mean Δ%": "{:+.2f}",
-                       "Std across models": "{:.2f}",
-                       "Min": "{:+.2f}", "Max": "{:+.2f}"}),
-    hide_index=True, width="stretch",
-)
+    st.markdown("##### Cross-model spread as an OOD-uncertainty signal")
+    spread = summary[summary["scenario"] == sel_scenario].groupby("crop")[
+        "delta_pct"].agg(["mean", "std", "min", "max", "count"])
+    spread.columns = ["Mean Δ%", "Std across models", "Min", "Max", "# models"]
+    spread = spread.sort_values("Std across models", ascending=False)
+    st.dataframe(
+        spread.reset_index().rename(columns={"crop": "Crop"})
+            .style.format({"Mean Δ%": "{:+.2f}",
+                           "Std across models": "{:.2f}",
+                           "Min": "{:+.2f}", "Max": "{:+.2f}"}),
+        hide_index=True, width="stretch",
+    )
 
 # --------------------------------------------------------------------------- #
-# Per-district map (optional, requires geopandas)
+# SECONDARY — per-district detail
 # --------------------------------------------------------------------------- #
 if not district.empty:
-    divider("Per-district predicted yield delta")
-    d_sel_model = st.selectbox(
-        "Model", sorted(district["model"].unique()), key="cf_dist_model")
-    d_sel_crop = st.selectbox(
-        "Crop", sorted(district["crop"].unique()),
-        index=sorted(district["crop"].unique()).index("winter_wheat")
-        if "winter_wheat" in district["crop"].unique() else 0,
-        key="cf_dist_crop")
-    d_sel_scen = st.selectbox(
-        "Scenario", sorted(district["scenario"].unique()),
-        index=sorted(district["scenario"].unique()).index("ssp5_8_5")
-        if "ssp5_8_5" in district["scenario"].unique() else 0,
-        key="cf_dist_scen")
-    sub = district[
-        (district["model"] == d_sel_model)
-        & (district["crop"] == d_sel_crop)
-        & (district["scenario"] == d_sel_scen)
-    ]
-    if not sub.empty:
-        # Average across 2024-25 predictions per district
-        agg = sub.groupby("landkreis").agg(
-            baseline=("pred_baseline", "mean"),
-            counterfactual=("pred_counterfactual", "mean"),
-            delta=("delta_dt_ha", "mean"),
-        ).reset_index()
-        agg["delta_pct"] = agg["delta"] / agg["baseline"] * 100
-        st.markdown(f"##### {d_sel_model} × {d_sel_crop} × {d_sel_scen}")
-        cA, cB, cC = st.columns(3)
-        with cA: kpi("Districts", f"{len(agg)}")
-        with cB: kpi("Median Δ%", f"{agg['delta_pct'].median():+.2f} %")
-        with cC: kpi("Δ range (dt/ha)",
-                     f"{agg['delta'].min():.1f} to {agg['delta'].max():.1f}")
+    with st.expander("Per-district detail", expanded=False):
+        d1, d2, d3 = st.columns(3)
+        with d1:
+            d_sel_model = st.selectbox(
+                "Model", sorted(district["model"].unique()), key="cf_dist_model")
+        with d2:
+            _dc = sorted(district["crop"].unique())
+            d_sel_crop = st.selectbox(
+                "Crop", _dc,
+                index=_dc.index("winter_wheat") if "winter_wheat" in _dc else 0,
+                key="cf_dist_crop")
+        with d3:
+            _ds = sorted(district["scenario"].unique())
+            d_sel_scen = st.selectbox(
+                "Scenario", _ds,
+                index=_ds.index("ssp5_8_5") if "ssp5_8_5" in _ds else 0,
+                key="cf_dist_scen")
+        sub = district[
+            (district["model"] == d_sel_model)
+            & (district["crop"] == d_sel_crop)
+            & (district["scenario"] == d_sel_scen)
+        ]
+        if sub.empty:
+            st.info("No per-district rows for this combination.")
+        else:
+            # Average across 2024-25 predictions per district
+            agg = sub.groupby("landkreis").agg(
+                baseline=("pred_baseline", "mean"),
+                counterfactual=("pred_counterfactual", "mean"),
+                delta=("delta_dt_ha", "mean"),
+            ).reset_index()
+            agg["delta_pct"] = agg["delta"] / agg["baseline"] * 100
+            cA, cB, cC = st.columns(3)
+            with cA: kpi("Districts", f"{len(agg)}")
+            with cB: kpi("Median Δ%", f"{agg['delta_pct'].median():+.2f} %")
+            with cC: kpi("Δ range (dt/ha)",
+                         f"{agg['delta'].min():.1f} to {agg['delta'].max():.1f}")
 
-        fig = px.histogram(
-            agg, x="delta_pct", nbins=30,
-            labels={"delta_pct": "Per-district yield delta (%)"},
-            title="Distribution of per-district yield delta",
-        )
-        fig.add_vline(x=0, line_dash="dot", line_color="grey")
-        fig.update_layout(height=340)
-        st.plotly_chart(fig, width="stretch")
+            fig = px.histogram(
+                agg, x="delta_pct", nbins=30,
+                labels={"delta_pct": "Per-district yield delta (%)"},
+                title=f"{d_sel_model} × {d_sel_crop} × {d_sel_scen}",
+            )
+            fig.add_vline(x=0, line_dash="dot", line_color="grey")
+            fig.update_layout(height=340)
+            st.plotly_chart(fig, width="stretch")
 
-        st.dataframe(
-            agg.sort_values("delta_pct", ascending=False).head(20)
-               .style.format({"baseline": "{:.2f}",
-                              "counterfactual": "{:.2f}",
-                              "delta": "{:+.2f}",
-                              "delta_pct": "{:+.2f} %"}),
-            hide_index=True, width="stretch",
-        )
+            st.markdown("##### Top 20 districts by delta")
+            st.dataframe(
+                agg.sort_values("delta_pct", ascending=False).head(20)
+                   .style.format({"baseline": "{:.2f}",
+                                  "counterfactual": "{:.2f}",
+                                  "delta": "{:+.2f}",
+                                  "delta_pct": "{:+.2f} %"}),
+                hide_index=True, width="stretch",
+            )
 
 # --------------------------------------------------------------------------- #
-# Footer
+# SECONDARY — method, scope limitations and provenance
 # --------------------------------------------------------------------------- #
-st.markdown("---")
+with st.expander("Method and limitations", expanded=False):
+    if _limits:
+        st.info("\n\n".join(_limits))
+    else:
+        st.info("No scope limitations detected: every perturbed column "
+                "reaches at least one model under the current feature policy.")
 
-# GCM list read from the processed CMIP6 parquet — never hardcoded.
-_cmip_path = PROJECT_ROOT / "data" / "processed" / "cmip6_nuts3.parquet"
-_gcm_txt = ""
-if _cmip_path.exists():
-    try:
-        _c = pd.read_parquet(_cmip_path, columns=["model"])
-        _gcms = sorted(_c["model"].astype(str).unique())
-        _gcm_txt = f"CMIP6 ensemble over {len(_gcms)} GCM(s): {', '.join(_gcms)}. "
-    except (ValueError, KeyError, OSError):
-        _gcm_txt = ""
+    st.markdown("##### Applied climate signal, both variables")
+    st.dataframe(
+        deltas.reset_index().rename(columns={
+            "scenario": "Scenario", "tasmax_delta_C": "tasmax Δ (°C)",
+            "pr_pct_delta": "precipitation Δ (%)"})
+        .style.format({"tasmax Δ (°C)": "{:+.2f}",
+                       "precipitation Δ (%)": "{:+.1f}"}),
+        hide_index=True, width="stretch",
+    )
 
-st.caption(
-    "**Methodology:** " + _gcm_txt +
-    "Monthly output; historical baseline 2003-2014, future window "
-    "2046-2050. Ensemble-mean monthly deltas are applied to the daily "
-    "2024-25 features — additive for tasmax/tasmin, multiplicative for pr. "
-    "The rsds delta is applied to `radiation_global`, which no model "
-    "consumes under feature policy v3 (see the note at the top). "
-    "Regenerate: `python scripts/09_cmip6_pull.py --model <name> && python "
-    "scripts/10_cmip6_process.py && python scripts/13_counterfactual_daily.py`."
-)
+    # GCM list read from the processed CMIP6 parquet — never hardcoded.
+    _cmip_path = PROJECT_ROOT / "data" / "processed" / "cmip6_nuts3.parquet"
+    _gcm_txt = ""
+    if _cmip_path.exists():
+        try:
+            _c = pd.read_parquet(_cmip_path, columns=["model"])
+            _gcms = sorted(_c["model"].astype(str).unique())
+            _gcm_txt = (f"CMIP6 ensemble over {len(_gcms)} GCM(s): "
+                        f"{', '.join(_gcms)}. ")
+        except (ValueError, KeyError, OSError):
+            _gcm_txt = ""
+
+    st.caption(
+        "**Methodology:** " + _gcm_txt +
+        "Monthly output; historical baseline 2003-2014, future window "
+        "2046-2050. Ensemble-mean monthly deltas are applied to the daily "
+        "2024-25 features — additive for tasmax/tasmin, multiplicative for "
+        "pr. The rsds delta is applied to `radiation_global`, which no model "
+        "consumes under feature policy v3. "
+        "Regenerate: `python scripts/09_cmip6_pull.py --model <name> && "
+        "python scripts/10_cmip6_process.py && python "
+        "scripts/13_counterfactual_daily.py`."
+    )
+    st.caption(
+        f"`{summary_path.name}` written "
+        f"{datetime.fromtimestamp(summary_path.stat().st_mtime):%Y-%m-%d %H:%M}"
+        + (f"; `{district_path.name}` written "
+           f"{datetime.fromtimestamp(district_path.stat().st_mtime):%Y-%m-%d %H:%M}."
+           if district_path.exists() else ".")
+    )

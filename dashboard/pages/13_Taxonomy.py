@@ -223,13 +223,18 @@ val_path = METRICS_DIR / "taxonomy_validation.csv"
 summary_path = METRICS_DIR / "multicrop_summary.csv"
 _fmt = "%Y-%m-%d %H:%M"
 
+# The message is computed here but rendered by severity: a firing staleness
+# error stays on the surface, an all-clear note is folded into Provenance.
+prov_error: str | None = None
+prov_note: str | None = None
+
 if not shipped.empty and "hit_at_1" in shipped.columns:
     s_hit1, s_n = int(shipped["hit_at_1"].sum()), len(shipped)
     s_hit3 = int(shipped["hit_at_3"].sum())
     older = (val_path.exists() and summary_path.exists()
              and val_path.stat().st_mtime < summary_path.stat().st_mtime)
     if (s_hit1, s_hit3, s_n) != (hit1, hit3, n) or older:
-        st.error(
+        prov_error = (
             f"**`taxonomy_validation.csv` is superseded — the numbers on this "
             f"page are recomputed live, not read from it.** The shipped file "
             f"(written {_dt.datetime.fromtimestamp(val_path.stat().st_mtime):{_fmt}}) "
@@ -239,18 +244,32 @@ if not shipped.empty and "hit_at_1" in shipped.columns:
             f"gives top-1 {hit1}/{n} and top-3 {hit3}/{n}. "
             f"Rerun `python scripts/14_taxonomy_validate.py` to resync."
         )
+    else:
+        prov_note = (
+            f"`taxonomy_validation.csv` (written "
+            f"{_dt.datetime.fromtimestamp(val_path.stat().st_mtime):{_fmt}}) "
+            f"agrees with the live recomputation: top-1 {hit1}/{n}, "
+            f"top-3 {hit3}/{n}."
+        )
 elif shipped.empty:
-    st.info(
+    prov_note = (
         "`taxonomy_validation.csv` is unavailable or gated out; everything on "
         "this page is recomputed from `multicrop_summary.csv` regardless."
     )
+
+if prov_error:
+    st.error(prov_error)
 
 # --------------------------------------------------------------------------- #
 # Headline
 # --------------------------------------------------------------------------- #
 divider("Does the taxonomy predict the winner?")
 
-k1, k2, k3, k4 = st.columns(4)
+clim_mean = float(clim["r2"].mean()) if not clim.empty else float("nan")
+n_noise = int((live["margin_over_runner_up"] < NOISE_R2).sum())
+n_skill = int((live["winner_skill_vs_null"] > 0).sum()) if clim_by_crop else 0
+
+k1, k2, k3, k4, k5 = st.columns(5)
 with k1:
     kpi("Top-1", f"{hit1}/{n}",
         f"{hit1 - const_hits:+d} vs always naming {const_model}")
@@ -260,34 +279,31 @@ with k3:
     kpi("Mean Spearman ρ",
         f"{mean_rho:+.3f}" if mean_rho == mean_rho else "—")
 with k4:
-    n_noise = int((live["margin_over_runner_up"] < NOISE_R2).sum())
     kpi("Crops whose winner is a tie", f"{n_noise}/{n}",
-        f"margin < {NOISE_R2:.2f} R²", )
+        f"margin < {NOISE_R2:.2f} R²")
+with k5:
+    kpi("Winners above the null", f"{n_skill}/{n}" if clim_by_crop else "—",
+        f"climatology R² = {clim_mean:.3f}" if clim_mean == clim_mean else None)
 
 st.caption(
+    f"The taxonomy has to beat the do-nothing alternative twice over: "
+    f"ignoring it and always naming `{const_model}` scores {const_hits}/{n} "
+    f"top-1, and a learn-nothing climatology reference scores "
+    f"{clim_mean:.3f} mean R² on these crops."
+    if clim_mean == clim_mean else
     f"Reference strategy: ignoring the taxonomy and always naming "
-    f"`{const_model}` — the most frequent winner in the current benchmark — "
-    f"scores {const_hits}/{n} top-1. The taxonomy has to beat that, not zero. "
-    f"No significance test is reported: the six candidate models are not "
-    f"exchangeable (their mean R² spans "
-    f"{scores.groupby('model')['r2'].mean().min():.3f} to "
-    f"{scores.groupby('model')['r2'].mean().max():.3f}), so a uniform-random "
-    f"null does not apply."
+    f"`{const_model}` scores {const_hits}/{n} top-1. The taxonomy has to beat "
+    f"that, not zero."
 )
 
-if clim_by_crop:
-    n_skill = int((live["winner_skill_vs_null"] > 0).sum())
-    if n_skill == n:
-        st.info(f"The observed winner beats the climatology reference on all "
-                f"{n} crops.")
-    else:
-        losers = ", ".join(live.loc[live["winner_skill_vs_null"] <= 0, "crop"])
-        st.warning(
-            f"The observed winner beats the climatology reference on "
-            f"{n_skill} of {n} crops. On the other {n - n_skill} "
-            f"({losers}) the taxonomy is naming the least-bad of a set in "
-            f"which nothing beats predicting the district baseline."
-        )
+if clim_by_crop and n_skill < n:
+    losers = ", ".join(live.loc[live["winner_skill_vs_null"] <= 0, "crop"])
+    st.warning(
+        f"The observed winner beats the climatology reference on "
+        f"{n_skill} of {n} crops. On the other {n - n_skill} "
+        f"({losers}) the taxonomy is naming the least-bad of a set in "
+        f"which nothing beats predicting the district baseline."
+    )
 
 # --------------------------------------------------------------------------- #
 # Per-crop
@@ -336,108 +352,141 @@ def _skill_ink(v):
     return "color: #2a78d6" if v > 0 else "color: #e34948"
 
 
-styler = (show.style
-              .format({"Winner R²": "{:.3f}", "Margin": "{:.3f}",
-                       "Climatology R²": "{:.3f}",
-                       "Winner skill vs null": "{:+.3f}",
-                       "Primary R²": "{:.3f}",
-                       "Winner − primary": "{:+.3f}"}, na_rep="—")
-              .map(_hit_bg, subset=["Top-1", "Top-3"])
-              .map(_margin_bg, subset=["Margin"])
-              .map(_skill_ink, subset=["Winner skill vs null"]))
-st.dataframe(styler, hide_index=True, width="stretch")
+NUM_FMT = {"Winner R²": "{:.3f}", "Margin": "{:.3f}",
+           "Climatology R²": "{:.3f}", "Winner skill vs null": "{:+.3f}",
+           "Primary R²": "{:.3f}", "Winner − primary": "{:+.3f}"}
+
+
+def _style(frame: pd.DataFrame):
+    """Format and colour whichever of the known columns ``frame`` carries."""
+    cols = set(frame.columns)
+    styler = frame.style.format(
+        {k: v for k, v in NUM_FMT.items() if k in cols}, na_rep="—")
+    hit_cols = [c for c in ("Top-1", "Top-3") if c in cols]
+    if hit_cols:
+        styler = styler.map(_hit_bg, subset=hit_cols)
+    if "Margin" in cols:
+        styler = styler.map(_margin_bg, subset=["Margin"])
+    if "Winner skill vs null" in cols:
+        styler = styler.map(_skill_ink, subset=["Winner skill vs null"])
+    return styler
+
+
+# The headline table answers the page's question and nothing else; the
+# remaining columns are kept, one click down, in "Per-crop detail".
+HEADLINE_COLS = ["Crop", "Predicted primary", "Observed winner", "Winner R²",
+                 "Climatology R²", "Winner skill vs null", "Margin",
+                 "Top-1", "Top-3"]
+st.dataframe(_style(show[HEADLINE_COLS]), hide_index=True, width="stretch")
 st.caption(
     f"A highlighted Margin is under {NOISE_R2:.2f} R², i.e. the winner and "
     f"runner-up are indistinguishable — a top-1 hit or miss on those crops "
-    f"carries no information. `Winner − primary` is how much R² the "
-    f"taxonomy's pick gave up; where it is near zero the miss is nominal."
+    f"carries no information."
 )
 
 near_miss = live[(live["hit_at_1"] == 0)
                  & (live["primary_gap"].abs() < NOISE_R2)]
-if not near_miss.empty:
-    st.caption(
-        "Nominal misses (taxonomy primary within "
-        f"{NOISE_R2:.2f} R² of the winner): "
-        + ", ".join(near_miss["crop"]) + "."
-    )
-
-# --------------------------------------------------------------------------- #
-# Rank correlation
-# --------------------------------------------------------------------------- #
-if not ranks.empty:
-    divider("Predicted rank minus observed rank")
-    ranks = ranks.copy()
-    ranks["rank_diff"] = ranks["predicted_rank"] - ranks["observed_rank"]
-    order = [m for m in list(TRANSFORMERS) + list(BASELINES)
-             if m in set(ranks["model"])]
-    pivot = (ranks.pivot(index="crop", columns="model", values="rank_diff")
-                  .reindex(columns=order))
-    fig = px.imshow(
-        pivot, color_continuous_scale=[(0.0, "#e34948"), (0.5, "#f0efec"),
-                                       (1.0, "#2a78d6")],
-        zmin=-5, zmax=5, aspect="auto", text_auto=True,
-        labels=dict(x="Model", y="Crop", color="Predicted − observed rank"),
-    )
-    fig.update_layout(height=420)
-    st.plotly_chart(fig, width="stretch")
-    st.caption(
-        "0 = the taxonomy placed the model where the benchmark did. Negative "
-        "= the taxonomy ranked it better than it performed. Columns: "
-        f"transformers ({', '.join(m for m in order if m in TRANSFORMERS)}), "
-        f"then baselines ({', '.join(m for m in order if m in BASELINES)})."
-    )
-    if per_crop_rho:
-        rho_df = (pd.DataFrame({"Crop": list(per_crop_rho),
-                                "Spearman ρ": list(per_crop_rho.values())})
-                    .sort_values("Spearman ρ", ascending=False))
-        st.dataframe(rho_df.style.format({"Spearman ρ": "{:+.3f}"}),
-                     hide_index=True, width="stretch")
-
-# --------------------------------------------------------------------------- #
-# Rationale per crop
-# --------------------------------------------------------------------------- #
-divider("The hypothesis, crop by crop")
-
-for _, row in live.iterrows():
-    verdict = ("top-1" if row["hit_at_1"] else
-               ("top-3" if row["hit_at_3"] else "miss"))
-    margin = row["margin_over_runner_up"]
-    if margin == margin and margin < NOISE_R2:
-        verdict += " (tied winner)"
-    label = (f"{verdict}  —  {row['crop']}: predicted "
-             f"{row['predicted_primary']}, observed "
-             f"{row['observed_best_model']} "
-             f"(R² {row['observed_best_r2']:.3f}")
-    label += f", margin {margin:.3f})" if margin == margin else ")"
-    with st.expander(label):
-        st.markdown(f"**A-priori rationale:** {row['rationale']}")
-        crop_meta = tax["crops"].get(row["crop"], {})
-        if crop_meta:
-            st.json({k: v for k, v in crop_meta.items() if k != "rationale"})
-
-# --------------------------------------------------------------------------- #
-# Reference
-# --------------------------------------------------------------------------- #
-divider("Reference — the two taxonomies")
-
-col1, col2 = st.columns(2)
-with col1:
-    st.markdown("##### Crop taxonomy")
-    st.dataframe(pd.DataFrame([{"Crop": k, **v} for k, v in tax["crops"].items()]),
-                 hide_index=True, width="stretch")
-with col2:
-    st.markdown("##### Model taxonomy")
-    model_df = pd.DataFrame([{"Model": k, **v} for k, v in tax["models"].items()])
-    model_df.insert(1, "Class", model_df["Model"].map(model_class))
-    st.dataframe(model_df, hide_index=True, width="stretch")
 
 st.markdown("---")
-st.caption(
-    "`configs/taxonomy.yaml` holds the hypothesis; it is committed before a "
-    "benchmark run and edited only to change the hypothesis. Everything above "
-    "is recomputed from it plus `results/metrics/multicrop_summary.csv` and "
-    "`results/metrics/climatology_baseline.csv`. "
-    "`python scripts/14_taxonomy_validate.py` writes the same result to "
-    "`results/metrics/taxonomy_validation.csv` for downstream use."
-)
+
+# --------------------------------------------------------------------------- #
+# Secondary — collapsed by default. Nothing here is deleted, only folded away.
+# --------------------------------------------------------------------------- #
+with st.expander("Per-crop detail — full columns and the a-priori rationale",
+                 expanded=False):
+    st.markdown("##### Every column")
+    st.dataframe(_style(show), hide_index=True, width="stretch")
+    st.caption(
+        "`Winner − primary` is how much R² the taxonomy's pick gave up; where "
+        "it is near zero the miss is nominal."
+    )
+    if not near_miss.empty:
+        st.caption(
+            "Nominal misses (taxonomy primary within "
+            f"{NOISE_R2:.2f} R² of the winner): "
+            + ", ".join(near_miss["crop"]) + "."
+        )
+
+    st.markdown("##### The hypothesis, crop by crop")
+    for _, row in live.iterrows():
+        verdict = ("top-1" if row["hit_at_1"] else
+                   ("top-3" if row["hit_at_3"] else "miss"))
+        margin = row["margin_over_runner_up"]
+        if margin == margin and margin < NOISE_R2:
+            verdict += " (tied winner)"
+        head = (f"**{row['crop']}** — {verdict}: predicted "
+                f"`{row['predicted_primary']}`, observed "
+                f"`{row['observed_best_model']}` "
+                f"(R² {row['observed_best_r2']:.3f}")
+        head += f", margin {margin:.3f})" if margin == margin else ")"
+        st.markdown(head)
+        st.caption(f"A-priori rationale: {row['rationale']}")
+
+if not ranks.empty:
+    with st.expander("Rank-correlation diagnostics", expanded=False):
+        ranks = ranks.copy()
+        ranks["rank_diff"] = ranks["predicted_rank"] - ranks["observed_rank"]
+        order = [m for m in list(TRANSFORMERS) + list(BASELINES)
+                 if m in set(ranks["model"])]
+        pivot = (ranks.pivot(index="crop", columns="model", values="rank_diff")
+                      .reindex(columns=order))
+        fig = px.imshow(
+            pivot, color_continuous_scale=[(0.0, "#e34948"), (0.5, "#f0efec"),
+                                           (1.0, "#2a78d6")],
+            zmin=-5, zmax=5, aspect="auto", text_auto=True,
+            labels=dict(x="Model", y="Crop", color="Predicted − observed rank"),
+        )
+        fig.update_layout(height=420)
+        st.plotly_chart(fig, width="stretch")
+        st.caption(
+            "0 = the taxonomy placed the model where the benchmark did. "
+            "Negative = the taxonomy ranked it better than it performed. "
+            "Columns: transformers "
+            f"({', '.join(m for m in order if m in TRANSFORMERS)}), "
+            f"then baselines ({', '.join(m for m in order if m in BASELINES)})."
+        )
+        if per_crop_rho:
+            rho_df = (pd.DataFrame({"Crop": list(per_crop_rho),
+                                    "Spearman ρ": list(per_crop_rho.values())})
+                        .sort_values("Spearman ρ", ascending=False))
+            st.dataframe(rho_df.style.format({"Spearman ρ": "{:+.3f}"}),
+                         hide_index=True, width="stretch")
+        st.caption(
+            f"No significance test is reported: the six candidate models are "
+            f"not exchangeable (their mean R² spans "
+            f"{scores.groupby('model')['r2'].mean().min():.3f} to "
+            f"{scores.groupby('model')['r2'].mean().max():.3f}), so a "
+            f"uniform-random null does not apply."
+        )
+
+with st.expander("Provenance and the two taxonomies", expanded=False):
+    if prov_error:
+        st.caption(
+            "The shipped `taxonomy_validation.csv` is out of sync — the "
+            "detail is in the error banner at the top of this page."
+        )
+    elif prov_note:
+        st.caption(prov_note)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("##### Crop taxonomy")
+        st.dataframe(
+            pd.DataFrame([{"Crop": k, **v} for k, v in tax["crops"].items()]),
+            hide_index=True, width="stretch")
+    with col2:
+        st.markdown("##### Model taxonomy")
+        model_df = pd.DataFrame(
+            [{"Model": k, **v} for k, v in tax["models"].items()])
+        model_df.insert(1, "Class", model_df["Model"].map(model_class))
+        st.dataframe(model_df, hide_index=True, width="stretch")
+
+    st.caption(
+        "`configs/taxonomy.yaml` holds the hypothesis; it is committed before "
+        "a benchmark run and edited only to change the hypothesis. Everything "
+        "on this page is recomputed from it plus "
+        "`results/metrics/multicrop_summary.csv` and "
+        "`results/metrics/climatology_baseline.csv`. "
+        "`python scripts/14_taxonomy_validate.py` writes the same result to "
+        "`results/metrics/taxonomy_validation.csv` for downstream use."
+    )
