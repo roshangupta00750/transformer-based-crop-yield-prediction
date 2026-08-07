@@ -64,6 +64,7 @@ SECTIONS = {
     ],
     "Supplementary": [
         _page(PAGES / "19_Recommendation.py", "Multi-criteria Recommendation"),
+        _page(PAGES / "20_Evidence.py", "Evidence"),
     ],
 }
 
