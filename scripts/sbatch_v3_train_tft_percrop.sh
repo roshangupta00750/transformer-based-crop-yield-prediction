@@ -6,8 +6,8 @@
 #SBATCH --mem=48G
 #SBATCH --time=01:15:00
 #SBATCH --array=1-10
-#SBATCH --output=/home/s517868/slurm_logs/tft-percrop-%A_%a.out
-#SBATCH --error=/home/s517868/slurm_logs/tft-percrop-%A_%a.err
+#SBATCH --output=slurm_logs/tft-percrop-%A_%a.out
+#SBATCH --error=slurm_logs/tft-percrop-%A_%a.err
 
 # Option C: per-crop TFT retrain. One task per crop, one H100 each.
 # Saves as results/checkpoints/tft_<crop>.{pt,pipeline.json}. The dashboard
@@ -18,14 +18,14 @@
 # more than 03_train.py's --crop + --suffix flags — no code changes upstream.
 
 set -euo pipefail
-mkdir -p /home/s517868/slurm_logs
-source ~/agri-venv/bin/activate
+mkdir -p slurm_logs
+source "${VENV:-.venv}/bin/activate"   # project environment (requirements.txt)
 
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS=4 MKL_NUM_THREADS=4
 export CROP_YIELD_DEVICE=cuda
 
-cd ~/crop_yield_benchmark
+cd "${SLURM_SUBMIT_DIR:-.}"   # submit from the project root
 
 CROPS=(winter_wheat winter_barley rye triticale winter_rapeseed
        summer_barley oats silage_maize potatoes sugar_beet)

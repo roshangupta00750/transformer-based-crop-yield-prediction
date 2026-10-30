@@ -5,16 +5,16 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=08:00:00
-#SBATCH --output=/home/s517868/slurm_logs/tft-%j.out
-#SBATCH --error=/home/s517868/slurm_logs/tft-%j.err
+#SBATCH --output=slurm_logs/tft-%j.out
+#SBATCH --error=slurm_logs/tft-%j.err
 
 set -euo pipefail
 
-mkdir -p /home/s517868/slurm_logs
-source ~/agri-venv/bin/activate
+mkdir -p slurm_logs
+source "${VENV:-.venv}/bin/activate"   # project environment (requirements.txt)
 export PYTHONUNBUFFERED=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
 
-cd ~/crop_yield_benchmark
+cd "${SLURM_SUBMIT_DIR:-.}"   # submit from the project root
 
 echo "=== node + GPU ==="
 hostname

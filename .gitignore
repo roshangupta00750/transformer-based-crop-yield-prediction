@@ -8,7 +8,8 @@ data/processed/*
 *.feather
 
 # ── Exceptions: bundle these small processed artefacts ──────────────
-!data/processed/dataset.parquet
+# dataset.parquet is no longer bundled: 351.7 MB on 2026-10-01, over Knot's 100 MB
+# safety limit, which held every auto-commit. Kept on disk only (owner decision).
 !data/processed/dataset.policy.json
 !data/processed/cmip6_nuts3.parquet
 
@@ -76,3 +77,14 @@ results/logs/
 # nav.py and Streamlit never serves it.
 dashboard/pages/01_Problem.py
 dashboard/pages/18_Geographic.py
+
+# logs of cluster jobs (scripts/sbatch_*.sh)
+slurm_logs/
+
+# Private cluster helpers (kept outside the repository)
+scripts/preflight.sh
+scripts/run_finetune.sh
+scripts/orchestrate_retrain_landfeatures.sh
+scripts/68_compute_cost.py
+scripts/cropaware_watcher.sh
+checkpoints/

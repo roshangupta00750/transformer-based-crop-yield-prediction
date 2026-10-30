@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
 #SBATCH --time=08:00:00
-#SBATCH --output=/home/s517868/slurm_logs/cf-fc-v3-%j.out
-#SBATCH --error=/home/s517868/slurm_logs/cf-fc-v3-%j.err
+#SBATCH --output=slurm_logs/cf-fc-v3-%j.out
+#SBATCH --error=slurm_logs/cf-fc-v3-%j.err
 
 # Regenerates the two downstream metric sets that still reflect the old
 # shared multi-crop TFT checkpoint:
@@ -32,8 +32,8 @@
 # used) because the L40 is slower and this sweep loads TFT many times.
 
 set -euo pipefail
-mkdir -p /home/s517868/slurm_logs
-source ~/agri-venv/bin/activate
+mkdir -p slurm_logs
+source "${VENV:-.venv}/bin/activate"   # project environment (requirements.txt)
 
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS=4 MKL_NUM_THREADS=4
@@ -41,7 +41,7 @@ export OMP_NUM_THREADS=4 MKL_NUM_THREADS=4
 # used to race on that file.
 export CROP_YIELD_DEVICE=cuda
 
-cd ~/crop_yield_benchmark
+cd "${SLURM_SUBMIT_DIR:-.}"   # submit from the project root
 
 echo "=== node ==="
 hostname

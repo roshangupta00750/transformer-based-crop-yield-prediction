@@ -1,0 +1,25 @@
+# Pre-registration v2 (paper/preregistration_2026-09-28_v2.md) arm P: D0 + observed phenology (full network)
+name: itransformer
+d_model: 128
+n_heads: 8
+n_layers: 3
+d_ff: 256
+dropout: 0.15            # bumped from 0.10 for regularization
+learning_rate: 0.0005
+batch_size: 128
+weight_decay: 0.05       # plumbed through AdamW in src/models/itransformer.py
+# Per-model budget — slight regression at 200/20, sweet spot is 120/15
+max_epochs: 120
+early_stopping_patience: 15
+
+# --- pre-registration controls (identical in all arms) ---
+max_minutes: 120
+resample_len: 220         # same model size in every arm
+common_sample: true       # same crop-years in every arm
+# --- what this arm changes ---
+window: crop_year
+drop_features: [ndvi, evi, lai, fpar]
+# --- v2 ---
+dataset: data/processed/dataset_v4.parquet
+phenology: full
+national: false

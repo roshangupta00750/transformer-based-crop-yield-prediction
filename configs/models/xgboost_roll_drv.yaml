@@ -1,0 +1,11 @@
+# XGBoost on engineered features (monthly aggregates)
+name: xgboost
+n_estimators: 500
+max_depth: 6
+learning_rate: 0.05
+subsample: 0.8
+colsample_bytree: 0.8
+objective: "reg:squarederror"
+early_stopping_rounds: 30
+
+max_minutes: 120         # rolling test: let early stopping decide

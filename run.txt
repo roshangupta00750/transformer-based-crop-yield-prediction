@@ -1,8 +1,8 @@
 # Crop Yield Benchmark — Run Commands
 #
-# Every command assumes you're in the project root and the conda env is active:
-#   cd /Users/roshangupta/Documents/Claude/Projects/Agriculture/crop_yield_benchmark
-#   conda activate agri
+# Every command assumes you are in the project root (crop_yield_benchmark/) with the project
+# environment active:
+#   source .venv/bin/activate      (see requirements.txt)
 #
 # All training/eval commands set OMP_NUM_THREADS=1 to avoid the macOS Intel
 # libomp segfault. The dashboard's run.sh does this automatically.

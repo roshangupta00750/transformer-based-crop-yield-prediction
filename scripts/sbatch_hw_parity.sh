@@ -4,8 +4,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=01:30:00
-#SBATCH --output=/home/s517868/slurm_logs/hwpar-%A_%a.out
-#SBATCH --error=/home/s517868/slurm_logs/hwpar-%A_%a.err
+#SBATCH --output=slurm_logs/hwpar-%A_%a.out
+#SBATCH --error=slurm_logs/hwpar-%A_%a.err
 
 # Does the GPU affect the metrics? Same commit, same seed, same config —
 # only the hardware differs. Submit twice, once per partition:
@@ -20,11 +20,11 @@
 # been tested. If the two arms disagree, every cross-run comparison in this
 # project is unsafe.
 set -euo pipefail
-mkdir -p /home/s517868/slurm_logs
-source ~/agri-venv/bin/activate
+mkdir -p slurm_logs
+source "${VENV:-.venv}/bin/activate"   # project environment (requirements.txt)
 export PYTHONUNBUFFERED=1 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4
 export CROP_YIELD_DEVICE=cuda
-cd ~/crop_yield_benchmark
+cd "${SLURM_SUBMIT_DIR:-.}"   # submit from the project root
 
 echo "=== $(date '+%F %H:%M:%S') hardware-parity arm: ${TAG} ==="
 hostname; nvidia-smi -L | head -1

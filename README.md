@@ -1,201 +1,130 @@
-# Crop Yield Benchmark — German NUTS-3
+# Transformer-based Crop Yield Prediction using Multivariate Timeseries Datasets
 
-An open, reproducible benchmark for multi-crop yield prediction covering
-**ten crops × 282 modeled German NUTS-3 districts × 23 years** (2003–2025) with
-six deep-learning architectures head-to-head, cross-model fusion, a
-first-principles **crop-model compatibility taxonomy**, and a CMIP6
-climate stress test.
+Praktikum project at the Chair for Computer Science IV (Computer Vision), Julius-Maximilians-Universität Würzburg.
+Authors: Roshan Kumar Gupta, Manisha Samal, Sreedeepthi Ramanath.
+Supervisor: Prof. Dr. Radu Timofte. Advisor: Dr. Fayaz Ali.
 
-> **Data-quality notice:** a source-level audit introduced feature-policy v3.
-> Bundled checkpoints and headline metrics created under the earlier policy
-> are legacy results and must not be reported as final. Retrain before using
-> the leaderboard: full-year phenology summaries leaked future observations,
-> and the DWD radiation feature was missing for most districts.
+The project estimates the official yields of ten field crops in German districts (NUTS-3) at the end of each
+season, before the statistics are published. The final model is called YieldFormer-DE (version v18). It averages
+three transformer networks for multivariate time series, the Temporal Fusion Transformer (TFT), iTransformer and
+PatchTST, and then corrects each district's usual over- or underestimate with a small error memory.
 
-**Institution:** Julius-Maximilians-Universität Würzburg, Institut für Informatik.
-**Praktikum project.**
+## Results in short
 
----
+All numbers come from a rolling evaluation: each season from 2010 to 2025 is predicted by models trained only on
+earlier seasons. This covers 37,383 district-crop-years in 363 districts.
 
-## What's inside
-
-| Layer | Contents |
+| Forecast | Accuracy (100 minus MAPE) |
 |---|---|
-| **Dataset** | 16.56 M daily rows of DWD weather + MODIS NDVI/EVI/LAI + SoilGrids soil + Destatis yield, producing about 45,000 quality-filtered (`landkreis`, `crop`, `year`) sequences. |
-| **Models** | XGBoost, DLinear, LSTM, PatchTST, iTransformer, TFT — one safe feature policy, temporal split (train ≤2022, val 2023, test 2024-2025). |
-| **Fusion** | Six methods (Ridge, NNLS, simple mean, weighted-by-val-R², median, best-single-by-val) with per-crop selection analysis. |
-| **Taxonomy** | `configs/taxonomy.yaml`: a-priori compatibility hypothesis mapping crop biology (phenology, critical windows) to model inductive biases (temporal receptive field, feature interaction order). |
-| **Climate stress** | CMIP6 counterfactuals under SSP2-4.5 and SSP5-8.5 (EC-Earth3-CC + MPI-ESM1-2-LR) via delta method on 2022-23 features. |
-| **Dashboard** | Streamlit app (`dashboard/Home.py`) with 16 pages covering data provenance, per-model training, per-crop scoring, spatial maps, in-season horizons, interpretability, literature comparison, fusion, climate, and taxonomy. |
+| YieldFormer-DE (v18) | 88.8 % |
+| 5-year district average | 86.9 % |
+| Long-term district normal | 86.4 % |
 
----
+- YieldFormer-DE beats the 5-year average in 13 of 16 seasons. The gain is largest in poor seasons, for example
+  11.6 percentage points in the 2018 drought.
+- Retrained on the data splits of three published German studies (AgroForecast-DE, CropFusionNet, Srivastava et
+  al.), the network ensemble wins 5 of 8 comparisons, loses 2 and ties 1. CropFusionNet stays clearly better for
+  silage maize.
+- For the 2025 season the national error is close to that of the EU's JRC MARS bulletins (6.1 % against 6.4 %).
+  This is not a like-for-like comparison: our estimate uses weather up to harvest.
+- Limits: with data cut at 30 June the model is no better than the 5-year average, and it underestimates very
+  large losses in single districts. The evidence rests on only 16 test seasons.
 
-## Headline finding
+## How the work was done
 
-The figures below describe the legacy v1 run and are retained only for
-reproducibility. They must be regenerated under feature-policy v3 before they
-are treated as project findings.
+- Data: district yields from Destatis (Regionalstatistik table 41241-01-03-4), daily weather from DWD stations
+  and ERA5-Land, soil water, MODIS vegetation indices over arable land (Google Earth Engine), DWD crop
+  development stages, SoilGrids soil data and census crop areas (Duden, Nacke and Offermann 2024). In total 69
+  daily inputs over each crop's season and 23 fixed inputs per district.
+- Every change was planned in writing before it was run, with its decision rule. The plans and results of all
+  20 versions are in `paper/preregistration_*.md`. Of 27 planned tests, three passed: arable-land satellite
+  averages (v1), the district error memory (v15) and the three-network ensemble (v18).
+- Inputs that would leak information from after the forecast date are excluded in `configs/data.yaml`.
+- Training ran on NVIDIA L40 and L40S GPUs of the GPU cluster of the University of Würzburg, about 317 GPU
+  hours for the final model. The three networks have 0.43, 0.22 and 1.27 million parameters.
+- Forecasts for 2026, 2027 and 2028 were sealed before any official figure existed. The files and their SHA-256
+  fingerprints are in `results/forecasts/`.
 
-The compatibility taxonomy makes an a-priori prediction about which model
-architecture should win each of the ten crops based on crop biology and
-model inductive biases. Empirical validation:
+## Model and data downloads
 
-- **Top-1 winner accuracy: 9 / 10 crops (90 %)**
-- **Top-3 winner accuracy: 10 / 10 crops (100 %)**
-- **Mean Spearman ρ between predicted and observed rankings: 0.69**
-- Probability of this pattern by chance ≈ 1.4 × 10⁻⁶.
+- Model checkpoints (the three networks of YieldFormer-DE and version v20):
+  https://huggingface.co/Roshangupta007/YieldFormer-DE
+- Training data set (`data/processed/dataset.parquet` and `data/processed/static/`):
+  https://huggingface.co/datasets/Roshangupta007/YieldFormer-DE-data
 
-Attention-based models (iTransformer, PatchTST, TFT) excel on complex
-crops with long phenology windows (root crops, silage maize). Recurrent
-and sequential models (LSTM) win on winter cereals with narrow
-grain-fill windows. XGBoost is the value-for-money baseline that wins
-where the yield / weather relationship is nearest-linear.
+Put the data files in `data/processed/` and the checkpoints in `results/checkpoints/` (file names unchanged)
+to re-run the evaluation without downloading the raw sources.
+The dashboard and its tests also need the district shapes, which `python scripts/00_build_geo.py` downloads
+from GISCO.
 
----
+## Dashboard
 
-## Reproduce the benchmark
-
-### Requirements
-
-Python 3.10+ recommended; see `requirements.txt` for pinned deps.
-Full retraining needs a CUDA GPU with at least 24 GB VRAM (RTX 3090
-sufficient) and 32 GB system RAM (TFT is the memory-heavy one).
+A one-screen Streamlit dashboard shows the estimates, the sealed forecasts and all comparisons. Filters on the
+left (crop, years, region, state, district, comparison, model) apply to every card and view. It runs on the
+local machine only.
 
 ```bash
+./dashboard/run.sh          # http://127.0.0.1:8502
+```
+
+The dashboard reads `results/dashboard/`, which `scripts/63_dashboard_data.py` rebuilds on every start. Its
+contract is written down in `dashboard/SPEC.md` and checked by `tests/test_dashboard_app.py`. The earlier
+multi-page dashboard is kept as a backup (`./dashboard/run_old.sh`, port 8503).
+
+## Running the code
+
+The project was developed with Python 3.9.
+
+```bash
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+pytest tests/
 ```
 
-### Reproduction paths
+Main steps of the pipeline:
 
-**Just want to explore the results?**
-The dashboard reads pre-computed CSVs; no training needed.
+| Step | Script |
+|---|---|
+| District shapes | `scripts/00_build_geo.py` |
+| Download weather, satellite, soil and yield data (needs Copernicus CDS and Google Earth Engine accounts) | `scripts/01_download_data.py` |
+| Build the data set | `scripts/02_preprocess.py` |
+| Train a network for one season and seed | `scripts/03_train.py` |
+| Fine-tune it per crop | `scripts/47_finetune_per_crop.py` |
+| Evaluate the final ensemble | `scripts/74_eval_v18.py` |
+| Comparison with the published studies | `scripts/75_paper_compare_v18.py` |
+| Score the sealed forecasts once official yields are out | `scripts/37_forecast_scoreboard.py` |
+| Computing cost from the cluster job logs | `scripts/79_compute_cost.py` |
 
-```bash
-streamlit run dashboard/Home.py
-```
+The cluster jobs are the `scripts/sbatch_*.sh` files (SLURM arrays, one task per season and seed). Submit them
+from the project root after `mkdir -p slurm_logs`, because SLURM opens the log files before the job starts. They
+activate `.venv` (or the environment named in `VENV`). The `--partition` and `--qos` lines are those of the
+Würzburg cluster; change them for another cluster.
 
-**Reproduce the full pipeline from raw sources?**
+## Repository layout
 
-```bash
-# 1. Fetch raw data (needs GEE + Copernicus CDS credentials).
-python scripts/00_build_geo.py           # NUTS-3 shapefile
-python scripts/01_download_data.py       # weather / satellite / soil / yield
-python scripts/02_preprocess.py          # unified dataset
-python scripts/09_cmip6_pull.py          # climate scenarios (~1 h)
-python scripts/10_cmip6_process.py       # downscale to NUTS-3
+- `configs/`: data and model settings, including the list of excluded inputs
+- `src/`: data pipeline, networks, training and evaluation code
+- `scripts/`: numbered pipeline and evaluation scripts
+- `results/metrics/`: evaluation results of all versions
+- `results/forecasts/`: sealed forecast files with their fingerprints
+- `results/dashboard/`: tables the dashboard reads
+- `dashboard/`: the Streamlit app (`main.py`, `app.py`), its specification and launchers
+- `paper/`: pre-registrations of all versions and paper drafts
+- `tests/`: unit tests for the data windows, the networks, the error memory and the dashboard
 
-# 2. Train the six models (~1-6 h each depending on GPU).
-for m in xgboost dlinear itransformer lstm patchtst tft; do
-  python scripts/03_train.py --model $m
-done
+The project started in summer 2026 as a benchmark of six architectures (XGBoost, DLinear, LSTM, PatchTST,
+iTransformer, TFT). Those early results were produced before leaking inputs were removed and are kept only as
+history; they are not results of this project.
 
-# 3. Evaluate.
-python scripts/05b_eval_multicrop.py     # per-(model, crop) test scores
-python scripts/05c_eval_horizons.py      # in-season horizons
-python scripts/06_spatial_eval.py        # per-district scores
-python scripts/06b_loo_xgboost.py        # leave-one-Landkreis-out (XGBoost)
-python scripts/07_fusion.py              # 6-method fusion
-python scripts/07_fusion.py --exclude tft --suffix _5models
-python scripts/07_fusion.py --suffix _6models
+## Data licences
 
-# 4. Taxonomy validation.
-python scripts/14_taxonomy_validate.py
-
-# 5. Climate counterfactual.
-python scripts/13_counterfactual_daily.py
-```
-
-### Feature-policy v3 safeguards
-
-- `radiation_global` is excluded until consistent district coverage is available.
-- Same-year `sos/eos/peak/amplitude/AUC` summaries remain available for
-  descriptive analysis but are excluded from prediction.
-- Crop sequences below 90% of the configured growing-season days are removed.
-- Updated cleaners emit soil-imputation flags plus satellite observation-age
-  and stale-value flags. Carry-forward values expire after their expected
-  composite window; remaining missing values use training-only means.
-- Existing pre-v3 checkpoints are rejected by evaluation code. Rebuild the data,
-  retrain all models, and regenerate metrics to publish corrected results.
-- The dashboard hides headline metrics until a complete safe multicrop
-  evaluation writes `results/metrics/feature_policy.json`.
-
-**Streamlit Cloud deploy?**
-The repo is Cloud-ready: `.streamlit/config.toml` is preconfigured,
-`requirements.txt` pins deps, small artefacts (the unified dataset, the
-CMIP6 monthly table, fusion prediction caches) are bundled. Set the
-entrypoint to `dashboard/Home.py`.
-
----
-
-## Data licensing
-
-The **code** is MIT (see `LICENSE`). **Source datasets follow their
-upstream licences** (DWD CC-BY-4.0 with attribution, Destatis DL-DE-BY-2.0,
-CMIP6 CC-BY-4.0, SoilGrids CC-BY-4.0, GISCO EuroGeographics attribution).
-The unified processed dataset is a derived work redistributed under the
-combined attribution requirements of its sources; if you use it, cite the
-upstream providers listed in `LICENSE`.
-
-## Cite
-
-Use `CITATION.cff` (see repo root) or the BibTeX snippet in the paper
-when published.
-
----
-
-## Related work
-
-The taxonomy contribution builds on:
-
-- Rice, J. R. (1976). *The Algorithm Selection Problem.*
-- Vanschoren, J. (2019). *Meta-Learning: A Survey.*
-- Talagala, T. S. et al. (2018). *Meta-learning how to forecast time series.*
-
-Comparable EU / German crop yield ML benchmarks:
-
-- Paudel et al. (2022). *ML for large-scale crop yield forecasting.* Ag. Systems.
-- Mateo-Sanchís et al. (2019). *Multi-source, multi-modal ML for EU wheat.* IEEE TGRS.
-- Schauberger et al. (2018). *Yield trends and drought responses in DE cereals.* Sci. Reports 8.
-- Folberth et al. (2019). *Process-model + ML residuals for EU barley.* Environ. Res. Lett.
-
----
-
-## Project layout
-
-```
-crop_yield_benchmark/
-├── configs/
-│   ├── data.yaml                       # crops, splits, phenology windows
-│   ├── experiment.yaml                 # device, max_minutes, seed
-│   ├── models/*.yaml                   # per-model hyperparameters
-│   └── taxonomy.yaml                   # crop-model compatibility hypothesis
-├── data/
-│   ├── raw/                            # (gitignored) upstream sources
-│   └── processed/
-│       ├── dataset.parquet             # bundled (46 MB)
-│       └── cmip6_nuts3.parquet         # bundled (17 MB)
-├── src/
-│   ├── data/                           # ETL + FeaturePipeline
-│   ├── models/                         # 6 model wrappers
-│   ├── training/                       # trainer, TFT adapter
-│   ├── evaluation/                     # metrics
-│   └── interpretation/                 # attention extraction
-├── scripts/                            # 00-14 numbered pipeline scripts
-├── dashboard/
-│   ├── Home.py                         # entrypoint
-│   └── pages/1_Data.py … 16_Taxonomy.py  # 16 pages
-├── results/
-│   ├── checkpoints/                    # (gitignored) trained .pt / .ubj files
-│   └── metrics/                        # CSVs — bundled
-├── CITATION.cff
-├── LICENSE
-├── README.md
-└── requirements.txt
-```
-
----
+The code is released under the MIT licence (see `LICENSE`). The source data keep their own licences: DWD and
+SoilGrids under CC BY 4.0, Destatis under the Data Licence Germany (dl-de/by-2-0), ERA5-Land under the Copernicus
+licence, MODIS data from NASA LP DAAC, census crop areas under CC BY 4.0, and the GISCO district boundaries
+(EuroGeographics) with their own attribution terms, which do not allow commercial use. Please cite the data
+providers when you use the data.
 
 ## Contact
 
-Roshan Gupta · <roshangupta00750@gmail.com>
+Roshan Kumar Gupta, roshangupta00750@gmail.com
 Julius-Maximilians-Universität Würzburg

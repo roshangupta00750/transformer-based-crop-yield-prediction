@@ -170,6 +170,133 @@ def _build_ags_to_nuts3(geo_dir: str | Path) -> dict[str, str]:
     return {_normalize_name(n): nid for nid, n in zip(de["NUTS_ID"], de["NUTS_NAME"])}
 
 
+# --------------------------------------------------------------------------- #
+# AGS -> NUTS-3 by code (preregistration v10 §2.1). The name-only mapping above
+# collides city/Landkreis pairs (e.g. "Hof, Kreisfreie Stadt" and "Hof,
+# Landkreis" both -> "hof") and drops renamed districts; kept only for old builds.
+# --------------------------------------------------------------------------- #
+_STATE = {"01": "DEF", "02": "DE6", "03": "DE9", "04": "DE5", "05": "DEA", "06": "DE7", "07": "DEB",
+          "08": "DE1", "09": "DE2", "10": "DEC", "11": "DE3", "12": "DE4", "13": "DE8", "14": "DED",
+          "15": "DEE", "16": "DEG"}
+# official successors of district reforms (old AGS -> 2021 NUTS-3)
+_OLD_TO_NUTS = {
+    "03152": "DE91C", "03156": "DE91C", "05313": "DEA2D", "05354": "DEA2D", "10041": "DEC01",
+    "13001": "DE80N", "13002": "DE80J", "13005": "DE80L", "13006": "DE80M", "13051": "DE80K",
+    "13052": "DE80J", "13053": "DE80K", "13054": "DE80O", "13055": "DE80J", "13056": "DE80J",
+    "13057": "DE80L", "13058": "DE80M", "13059": "DE80N", "13060": "DE80O", "13061": "DE80L", "13062": "DE80N",
+    "14161": "DED41", "14166": "DED44", "14167": "DED45", "14171": "DED42", "14173": "DED45",
+    "14177": "DED43", "14178": "DED44", "14181": "DED42", "14182": "DED43", "14188": "DED42",
+    "14191": "DED42", "14193": "DED45", "14262": "DED21", "14263": "DED2D", "14264": "DED2C",
+    "14272": "DED2C", "14280": "DED2E", "14284": "DED2D", "14285": "DED2E", "14286": "DED2D",
+    "14287": "DED2F", "14290": "DED2F", "14292": "DED2C", "14365": "DED51", "14374": "DED53",
+    "14375": "DED43", "14379": "DED52", "14383": "DED52", "14389": "DED53",
+    "15101": "DEE01", "15151": "DEE05", "15153": "DEE0C", "15154": "DEE05", "15159": "DEE05",
+    "15171": "DEE0E", "15202": "DEE02", "15256": "DEE08", "15260": "DEE0A", "15261": "DEE0B",
+    "15265": "DEE0B", "15266": "DEE0A", "15268": "DEE08", "15303": "DEE03", "15352": "DEE0C",
+    "15355": "DEE07", "15357": "DEE09", "15358": "DEE06", "15362": "DEE07", "15363": "DEE0D",
+    "15364": "DEE09", "15367": "DEE0C", "15369": "DEE09", "15370": "DEE04"}
+# current codes whose names do not match GISCO's spelling
+_CUR_TO_NUTS = {"13003": "DE803", "13004": "DE804", "11000": "DE300", "02000": "DE600",
+                "16056": "DEG0N", "03241": "DE929", "05334": "DEA2D", "13072": "DE80K",
+                "14729": "DED52", "14713": "DED51", "14511": "DED41", "14612": "DED21"}
+
+
+def _base_name(s: str) -> str:
+    s = s.lower()
+    for pat in (r"kreisfreie stadt", r"stadtkreis", r"krsfr\. stadt", r"krfr\. stadt", r"landeshauptstadt",
+                r"hansestadt", r"landkreis", r"\bkreis\b", r", stadt\b", r"\(de\)", r"regionalverband",
+                r"\bstadt\b"):
+        s = re.sub(pat, " ", s)
+    return re.sub(r"[^\w]+", "", s)
+
+
+def _raw_kind(code: str, label: str) -> str:
+    l = label.lower()
+    if re.search(r"kreisfreie stadt|stadtkreis|krsfr|krfr|, stadt\b|landeshauptstadt", l) and "region hannover" not in l:
+        return "city"
+    if code.startswith("09") and code[3] == "6":        # Bavarian kreisfreie Städte
+        return "city"
+    if code in ("02000", "11000", "04011", "04012"):
+        return "city"
+    return "lk"
+
+
+def build_ags_to_nuts3_by_code(codes_labels, geo_dir: str | Path) -> pd.DataFrame:
+    """AGS -> NUTS-3 (2021) by state + city/Landkreis type + name, plus reform successors.
+
+    Returns columns ags, label, nuts, kind ('current' | 'old'). Every current
+    NUTS-3 code is the target of at most one current AGS (asserted).
+    """
+    import difflib
+    import geopandas as gpd
+    shp = gpd.read_file(Path(geo_dir) / "NUTS_RG_01M_2021_4326_LEVL_3.shp")
+    de = shp[shp["CNTR_CODE"] == "DE"][["NUTS_ID", "NUTS_NAME"]].copy()
+    de["st"] = de["NUTS_ID"].str[:3]
+    de["b"] = de["NUTS_NAME"].map(_base_name)
+    l = de["NUTS_NAME"].str.lower()
+    de["t"] = l.map(lambda x: "city" if ("kreisfreie stadt" in x or "stadtkreis" in x)
+                    else ("lk" if "landkreis" in x else "any"))
+    rows = []
+    for code, label in codes_labels:
+        label = str(label)
+        if code in _CUR_TO_NUTS:
+            rows.append((code, label, _CUR_TO_NUTS[code], "current")); continue
+        if code in _OLD_TO_NUTS:
+            rows.append((code, label, _OLD_TO_NUTS[code], "old")); continue
+        cand = de[(de["st"] == _STATE[code[:2]]) & de["t"].isin([_raw_kind(code, label), "any"])]
+        b = _base_name(label)
+        hit = cand[cand["b"] == b]
+        if len(hit) != 1:
+            hit = cand[cand["b"].isin(difflib.get_close_matches(b, cand["b"].tolist(), n=1, cutoff=0.75))]
+        rows.append((code, label, hit["NUTS_ID"].iloc[0] if len(hit) == 1 else None, "current"))
+    mp = pd.DataFrame(rows, columns=["ags", "label", "nuts", "kind"])
+    cur = mp[(mp["kind"] == "current") & mp["nuts"].notna()]
+    dup = cur[cur["nuts"].duplicated(keep=False)]
+    assert dup.empty, f"two current AGS map to one NUTS-3:\n{dup}"
+    return mp
+
+
+def clean_by_code(raw_paths, out_path: str | Path, geo_dir: str | Path,
+                  mapping_out: str | Path | None = None) -> Path:
+    """(landkreis, crop, year, yield) from one or more Regionaldatenbank CSVs, matched by AGS.
+
+    A current-code value always wins. A year without one is filled only from a
+    single old predecessor that maps to that NUTS-3 alone (preregistration v10 §2.1).
+    """
+    raw = pd.concat([pd.read_csv(p, sep=";", encoding="utf-8-sig", dtype=str) for p in raw_paths],
+                    ignore_index=True)
+    raw = raw.rename(columns={"time": "year", "1_variable_attribute_code": "ags",
+                              "1_variable_attribute_label": "kreis_name",
+                              "2_variable_attribute_label": "crop_de", "value": "yield_dt_per_ha"})
+    raw = raw[raw["ags"].str.fullmatch(r"\d{5}", na=False)]
+    codes = raw[["ags", "kreis_name"]].drop_duplicates("ags").values
+    mp = build_ags_to_nuts3_by_code(codes, geo_dir)
+    if mapping_out:
+        mp.to_csv(mapping_out, index=False)
+    df = raw.merge(mp[["ags", "nuts", "kind"]], on="ags", how="left").rename(columns={"nuts": "landkreis"})
+    df["crop"] = df["crop_de"].map(CROP_MAP)
+    df["yield_dt_per_ha"] = pd.to_numeric(df["yield_dt_per_ha"], errors="coerce")
+    df["year"] = pd.to_numeric(df["year"], errors="coerce")
+    df = df.dropna(subset=["landkreis", "crop", "yield_dt_per_ha", "year"])
+    df["year"] = df["year"].astype(int)
+    df = df.drop_duplicates(["ags", "crop", "year"], keep="last")
+    cur = df[df["kind"] == "current"]
+    assert not cur.duplicated(["landkreis", "crop", "year"]).any(), "duplicate current values"
+    old = df[df["kind"] == "old"]
+    n_pred = old.groupby(["landkreis", "crop", "year"])["ags"].transform("nunique")
+    single = old[n_pred == 1]
+    have = pd.MultiIndex.from_frame(cur[["landkreis", "crop", "year"]])
+    fill = single[~pd.MultiIndex.from_frame(single[["landkreis", "crop", "year"]]).isin(have)]
+    out = pd.concat([cur.assign(source="current"), fill.assign(source="predecessor")], ignore_index=True)
+    out = out[["landkreis", "crop", "year", "yield_dt_per_ha", "source"]].sort_values(
+        ["landkreis", "crop", "year"]).reset_index(drop=True)
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    out.to_parquet(out_path, index=False)
+    log.info("Yields by AGS -> %s: %d rows, %d districts (%d predecessor fills)",
+             out_path, len(out), out["landkreis"].nunique(), int((out["source"] == "predecessor").sum()))
+    return Path(out_path)
+
+
 def clean(
     raw_path: str | Path,
     out_path: str | Path,

@@ -1,91 +1,50 @@
-# Crop Yield Benchmark — Dashboard
+# YieldFormer-DE dashboard
 
-Streamlit dashboard wrapping the multi-model benchmark in
-`Crop_Yield_Transformer_Preliminary.pptx`. Lightweight, single-process,
-file-based (no DB).
+A one-screen Streamlit dashboard for the project's results: the district estimates of YieldFormer-DE (v18) for
+2010-2025, the sealed 2026 forecast, and every comparison. It runs on the local machine only.
 
-**Run with the wrapper script** (recommended — pins OpenMP/MKL to avoid
-macOS Intel segfaults from competing libomp.dylib copies):
+## Start
 
 ```bash
-conda activate agri
-./dashboard/run.sh
+./dashboard/run.sh          # http://127.0.0.1:8502
 ```
 
-Or invoke streamlit manually. Prefer the grouped-sidebar entrypoint —
-it collapses the 19 pages into 7 named sections:
+`run.sh` first runs `scripts/63_dashboard_data.py`, which rebuilds the tables in `results/dashboard/` from the
+evaluation results, and then starts Streamlit with `dashboard/main.py`. It also pins OpenMP and MKL to one thread,
+which avoids crashes on macOS when several libraries bring their own copy of libomp. The first page load takes
+15 to 20 seconds; after that a click takes about a second.
+
+## What is on the screen
+
+- Filters on the left: crop, years, region (North, East, South, West), state, district, the comparison
+  (5-year average, long-term average or the XGBoost reference) and the model (YieldFormer-DE or one of its three
+  members). They apply to every card and view, and Reset sets them back.
+- Five cards: accuracy, seasons better than the comparison, share of estimates within 10 %, poor years detected,
+  and the 2026 forecast. The small (i) on each card explains it.
+- Five views:
+  - Map: the 2026 forecast or any harvest from 2010 to 2025, accuracy, gain and crop area; click a district to
+    open its card; click a region or a season to filter.
+  - District look-up: forecast, normal yield, accuracy, crop area and all years of one district.
+  - Table & download: all estimates of the selection as CSV, also in a German Excel format.
+  - Forecasts: the sealed files and a first check against preliminary national yields.
+  - Compare: simple averages and members, seasons and regions, published models, JRC MARS 2025, poor years and
+    computing cost.
+- Spotlight: click a card, table or chart to light it up and dim the rest of the page (Esc clears it). Switch it
+  off in the left panel.
+
+## Files
+
+- `main.py`: entry point. It shows only `app.py`, so the older pages in `pages/` cannot be opened.
+- `app.py`: the dashboard.
+- `SPEC.md`: what the dashboard must contain (part A) and the contract of the old app (part B).
+- `static/de_nuts3.json`: district shapes, written by `app.py` and loaded once by the browser.
+- `run_old.sh`: the earlier multi-page dashboard, kept as a backup (port 8503).
+
+## Tests
 
 ```bash
-conda activate agri
-streamlit run dashboard/nav.py
+pytest tests/test_dashboard_app.py
 ```
 
-`streamlit run dashboard/Home.py` also works but shows the auto-discovered
-flat 19-entry sidebar (same env vars are set at the top of `Home.py`,
-`nav.py`, and `utils.py`, so any entrypoint is safe on macOS Intel).
-
-The default URL is <http://localhost:8501>.
-
-### macOS segfault note
-
-On Intel Macs, torch, xgboost, lightning, and numpy/MKL each ship their
-own copy of `libomp.dylib`. When two of those end up loaded in the same
-process — which happens the moment a per-model page imports a checkpoint
-— the OpenMP runtimes collide and the process segfaults. The fix is to
-set `OMP_NUM_THREADS=1`, `MKL_NUM_THREADS=1`, and
-`KMP_DUPLICATE_LIB_OK=TRUE` *before* Python imports any of those libraries.
-The dashboard does this in three places (`run.sh`, `Home.py`,
-`utils.py`) so any reasonable entry point picks it up.
-
-## Pages
-
-| Page | What it does |
-|---|---|
-| **Home** | Project overview + leaderboard table (best R² per model) + horizon plot. |
-| **Data** | Source provenance (DWD, MODIS, SoilGrids, Regionalstatistik, GISCO) + live previews of the interim parquets. |
-| **Train** | Launch any of the six training scripts in a background subprocess. Live log tail; non-blocking. |
-| **XGBoost** / **LSTM** / **DLinear** / **PatchTST** / **iTransformer** / **TFT** | Per-model page — hyperparams, in-season metrics, predictions vs. truth scatter, residuals, top errors, CSV download. |
-| **Geographic** | Folium choropleth of actual / predicted / residual yield across the ~400 German Landkreise. Per-district year trend. |
-
-## Architecture
-
-```
-dashboard/
-├── Home.py                  # leaderboard + KPIs
-├── utils.py                 # cached loaders, paths, subprocess wrapper
-├── _model_template.py       # one render() function shared by all 6 model pages
-└── pages/
-    ├── 1_Data.py
-    ├── 2_Train.py
-    ├── 3..8_<model>.py      # 3-line wrappers per model
-    └── 9_Geographic.py
-```
-
-- **Caching**: `@st.cache_data(ttl=300)` on unified parquet load, 60 s on
-  metrics; pages stay snappy after the first hit.
-- **Training jobs**: `subprocess.Popen` with `start_new_session=True` so they
-  outlive any page rerun. Status polled via `os.kill(pid, 0)`; logs tailed
-  from `/tmp/dashboard_<model>.log`.
-- **No DB**: predictions are recomputed on demand by loading the saved
-  `<model>.pt` + `<model>.pipeline.json` checkpoint pair. Computation is
-  bounded (~5 s per page) and `@st.cache_data` re-uses results within a
-  session.
-
-## Production notes
-
-This is intentionally not Kubernetes-grade. For a Praktikum demo it's
-fine; if you want to harden it later:
-
-- Front with `streamlit run --server.headless true` behind nginx + TLS.
-- Replace `subprocess.Popen` with a real job queue (RQ + Redis or Celery)
-  so training survives dashboard restarts.
-- Persist run metadata to SQLite for richer history (currently we keep
-  only the latest `<model>_meta.json`).
-
-## Footprint
-
-| Component | Disk | RAM (idle) |
-|---|---|---|
-| `dashboard/*.py` | <50 KB | — |
-| Streamlit deps already in `agri` env | included | ~200 MB |
-| Per-session memory | — | ~150–300 MB depending on data preview |
+The tests open every view with and without a district and crop selected and check that the required elements are
+there.

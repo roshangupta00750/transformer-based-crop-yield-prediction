@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +27,9 @@ class TrainResult:
     best_epoch: int | None
     config: dict
     notes: str = ""
+    stop_reason: str | None = None          # early_stop | time_cap | max_epochs (models that record it)
+    best_val_loss: float | None = None
+    history: list = field(default_factory=list)   # per epoch: train_loss, val_loss, seconds
 
 
 class Trainer:
@@ -58,12 +61,19 @@ class Trainer:
         )
 
         elapsed = time.time() - t0
-        log.info("Done in %.1fs", elapsed)
+        hist = list(getattr(self.model, "history_", []) or [])
+        best_epoch = getattr(self.model, "best_epoch_", None)
+        vals = [h["val_loss"] for h in hist if h.get("val_loss") is not None]
+        stop = getattr(self.model, "stop_reason_", None)
+        log.info("Done in %.1fs: %d epochs, best epoch %s, stop: %s", elapsed, len(hist), best_epoch, stop)
         return TrainResult(
             model_name=self.model.name,
             fit_seconds=elapsed,
-            best_epoch=None,
+            best_epoch=best_epoch,
             config=self.model.config,
+            stop_reason=stop,
+            best_val_loss=min(vals) if vals else None,
+            history=hist,
         )
 
     def save_metadata(self, result: TrainResult, out_dir: str | Path,

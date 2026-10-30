@@ -7,8 +7,8 @@
 #SBATCH --mem=64G
 #SBATCH --time=02:00:00
 #SBATCH --array=1-2
-#SBATCH --output=/home/s517868/slurm_logs/abl-axis-%A_%a.out
-#SBATCH --error=/home/s517868/slurm_logs/abl-axis-%A_%a.err
+#SBATCH --output=slurm_logs/abl-axis-%A_%a.out
+#SBATCH --error=slurm_logs/abl-axis-%A_%a.err
 
 # Attention-axis ablation for the paper's central claim: for MULTIVARIATE
 # crop series, does attention over VARIATES beat attention over TIME?
@@ -16,11 +16,11 @@
 # Both arms are the same architecture at the same parameter count (428,801,
 # encoder identical); only iTransformer's defining transpose is removed.
 set -euo pipefail
-mkdir -p /home/s517868/slurm_logs
-source ~/agri-venv/bin/activate
+mkdir -p slurm_logs
+source "${VENV:-.venv}/bin/activate"   # project environment (requirements.txt)
 export PYTHONUNBUFFERED=1 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4
 export CROP_YIELD_DEVICE=cuda
-cd ~/crop_yield_benchmark
+cd "${SLURM_SUBMIT_DIR:-.}"   # submit from the project root
 
 AXES=(variate temporal)
 AXIS="${AXES[$((SLURM_ARRAY_TASK_ID - 1))]}"

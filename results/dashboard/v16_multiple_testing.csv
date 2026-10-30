@@ -1,0 +1,10 @@
+version,change,p_delta_gt_0,adopted,bonferroni_level,survives_bonferroni,dev_2016_2025_p
+v7,R7 recent-level baseline,0.874,False,0.9944444444444444,False,
+v8,Y rapeseed model,0.83,False,0.9944444444444444,False,
+v9,baseline blend,0.84,False,0.9944444444444444,False,
+v10,D10 corrected data,0.003,False,0.9944444444444444,False,
+v12,Q12 vs v4 F (same rows),0.5,False,0.9944444444444444,False,
+v13,C13 crop-specific satellite,0.08,False,0.9944444444444444,False,
+v14,H14 HYRAS weather,0.24,False,0.9944444444444444,False,
+v15,E15 error memory,0.984,True,0.9944444444444444,False,0.9995
+v15,W15 area-weighted training,0.39,False,0.9944444444444444,False,

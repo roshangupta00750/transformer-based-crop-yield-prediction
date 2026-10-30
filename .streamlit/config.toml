@@ -1,13 +1,22 @@
+[global]
+# Reset and chart clicks set filter widgets through st.session_state (dashboard/app.py).
+disableWidgetStateDuplicationWarning = true
+
 [server]
+# dashboard/static/ (district shapes for the map, written by dashboard/app.py::load_geo)
+enableStaticServing = true
 maxUploadSize = 200
 enableXsrfProtection = false
 
 [theme]
 base = "light"
-primaryColor = "#2b7a2b"
+primaryColor = "#2a78d6"
 backgroundColor = "#ffffff"
-secondaryBackgroundColor = "#f4f6f4"
+secondaryBackgroundColor = "#f5f7fa"
 textColor = "#1a1a1a"
 
 [browser]
 gatherUsageStats = false
+
+[client]
+toolbarMode = "viewer"

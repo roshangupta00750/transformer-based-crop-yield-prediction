@@ -340,84 +340,16 @@ def load_pipeline(model: str):
 
 
 # --------------------------------------------------------------------------- #
-# Training subprocess helpers — GPU box via SSH, with local CPU fallback
+# Training subprocess helpers: runs start on this computer (CPU, or a GPU if PyTorch finds one).
+# Large runs go to a SLURM cluster through scripts/sbatch_*.sh instead.
 # --------------------------------------------------------------------------- #
-# SSH alias for the JMU GPU box (see ~/.ssh/config block `Host gpu`).
-GPU_HOST = "gpu"
-GPU_PROJECT_DIR = "~/crop_yield_benchmark"
-GPU_REMOTE_LOG = "/tmp/dash_train_{model}.log"
-
-# Models that empirically cannot train on the GPU box (RAM-bound on the
-# 15 GB shared lab machine). pytorch-forecasting's TFT instantiation
-# OOMs even at batch_size=32; documented in the project memory.
-GPU_BLOCKLIST: set[str] = {"tft"}
-
-
-def _gpu_reachable(timeout_s: int = 3) -> bool:
-    """Quick BatchMode SSH probe — returns True only if passwordless login works."""
-    try:
-        result = subprocess.run(
-            ["ssh", "-o", f"ConnectTimeout={timeout_s}",
-             "-o", "BatchMode=yes", GPU_HOST, "true"],
-            capture_output=True, timeout=timeout_s + 2,
-        )
-        return result.returncode == 0
-    except Exception:
-        return False
-
-
 def launch_training(model: str, crop: str | None = None,
-                    extra_args: list[str] | None = None,
-                    force_local: bool = False) -> tuple[int, str, str]:
-    """Spawn a background training run.
+                    extra_args: list[str] | None = None) -> tuple[int, str, str]:
+    """Spawn a background training run on this computer.
 
-    Tries the GPU box via SSH first; falls back to local CPU when SSH is
-    unreachable, when ``force_local`` is set, or when the model is in
-    :data:`GPU_BLOCKLIST` (currently TFT, which OOMs on the lab box).
-
-    Returns ``(pid, log_path, location)`` where ``location`` is
-    ``"remote"`` or ``"local"``. For remote runs the PID is the *remote*
-    PID and ``log_path`` is the remote path on the GPU box; pass
-    ``location`` back to :func:`process_alive` and :func:`tail` so they
-    route correctly.
+    Returns ``(pid, log_path, location)``; ``location`` is always ``"local"``.
     """
-    use_remote = (not force_local
-                  and model not in GPU_BLOCKLIST
-                  and _gpu_reachable())
-    if use_remote:
-        try:
-            return _launch_remote(model, crop, extra_args)
-        except Exception:
-            # Any SSH/launch failure: fall back to local rather than block the user.
-            pass
     return _launch_local(model, crop, extra_args)
-
-
-def _launch_remote(model: str, crop: str | None,
-                   extra_args: list[str] | None) -> tuple[int, str, str]:
-    log_path = GPU_REMOTE_LOG.format(model=model)
-    train_cmd = f"python scripts/03_train.py --model {model}"
-    if crop:
-        train_cmd += f" --crop {crop}"
-    if extra_args:
-        train_cmd += " " + " ".join(extra_args)
-
-    remote_cmd = (
-        f"cd {GPU_PROJECT_DIR} && "
-        f"source .venv/bin/activate && "
-        f"export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 && "
-        f"nohup {train_cmd} > {log_path} 2>&1 & echo $!"
-    )
-    result = subprocess.run(
-        ["ssh", "-o", "ConnectTimeout=5", GPU_HOST, remote_cmd],
-        capture_output=True, text=True, timeout=15,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"remote launch failed: {result.stderr.strip()[:200]}")
-    last = result.stdout.strip().splitlines()[-1].strip()
-    if not last.isdigit():
-        raise RuntimeError(f"remote launch returned non-PID: {last!r}")
-    return int(last), log_path, "remote"
 
 
 def _launch_local(model: str, crop: str | None,
@@ -444,24 +376,11 @@ def _launch_local(model: str, crop: str | None,
 def process_alive(pid: int, location: str = "local") -> bool:
     """True iff the training process is still executing.
 
-    ``location`` is ``"local"`` or ``"remote"``. For remote runs we shell
-    out over SSH to ``kill -0 <pid>`` on the GPU box; the local path uses
-    ``ps -p`` to filter out zombies (see longer note in the prior version
-    of this function).
+    ``location`` is kept for compatibility and is always ``"local"``; ``ps -p``
+    filters out zombie processes.
     """
     if pid is None or pid <= 0:
         return False
-    if location == "remote":
-        try:
-            r = subprocess.run(
-                ["ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes",
-                 GPU_HOST, f"kill -0 {pid} 2>/dev/null && echo alive"],
-                capture_output=True, text=True, timeout=10,
-            )
-            return r.returncode == 0 and "alive" in r.stdout
-        except Exception:
-            return False
-
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -481,12 +400,6 @@ def process_alive(pid: int, location: str = "local") -> bool:
 
 def stop_process(pid: int, location: str = "local") -> None:
     """Best-effort SIGTERM then SIGKILL the training process."""
-    if location == "remote":
-        subprocess.run(
-            ["ssh", GPU_HOST, f"kill {pid} 2>/dev/null; sleep 1; kill -9 {pid} 2>/dev/null"],
-            capture_output=True, timeout=15,
-        )
-        return
     try:
         os.kill(pid, 15)
         time.sleep(1)
@@ -497,17 +410,7 @@ def stop_process(pid: int, location: str = "local") -> None:
 
 
 def tail(path: str | Path, n: int = 200, location: str = "local") -> str:
-    """Tail the last ``n`` lines of a training log, either local or remote."""
-    if location == "remote":
-        try:
-            r = subprocess.run(
-                ["ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes",
-                 GPU_HOST, f"tail -n {n} {path} 2>/dev/null"],
-                capture_output=True, text=True, timeout=10,
-            )
-            return r.stdout or ""
-        except Exception:
-            return ""
+    """Tail the last ``n`` lines of a training log."""
     path = Path(path)
     if not path.exists():
         return ""
@@ -524,8 +427,76 @@ def tail(path: str | Path, n: int = 200, location: str = "local") -> str:
 # --------------------------------------------------------------------------- #
 # Cosmetic helpers
 # --------------------------------------------------------------------------- #
-def kpi(label: str, value: str | float, delta: str | None = None) -> None:
-    st.metric(label=label, value=value, delta=delta)
+def kpi(label: str, value: str | float, delta: str | None = None,
+        help: str | None = None) -> None:
+    st.metric(label=label, value=value, delta=delta, help=help)
+
+
+# Plain-language explanations shown behind the (?) icons on every page, so a
+# viewer never meets a unit or a technical term without a definition.
+HELP = {
+    "dt_ha": "dt/ha = decitonnes per hectare, the unit used in German crop "
+             "statistics. 1 decitonne = 100 kg, so 80 dt/ha = 8 tonnes per "
+             "hectare (a hectare is 100 m × 100 m).",
+    "historical": "Historical average: the district's own average yield for "
+                  "this crop over the training years 2003–2022, adjusted for a "
+                  "long-term trend where one is clear. It is the simplest "
+                  "possible forecast, so a useful model has to beat it.",
+    "error": "Error (RMSE, in dt/ha): the typical size of a prediction miss on "
+             "the test years 2024–2025, which no model saw during training. "
+             "Lower is better; big misses count more than small ones.",
+    "pct": "% difference in error: how much bigger (+) or smaller (−) a "
+           "model's error is than the error of the historical average. "
+           "Negative = the model is more accurate than the historical average.",
+    "districts": "German districts (Landkreise and kreisfreie Städte, EU "
+                 "level NUTS-3) that have yield records.",
+    "crops": "Winter wheat, winter barley, rye, triticale, winter rapeseed, "
+             "summer barley, oats, silage maize, potatoes and sugar beet.",
+    "years": "Models are trained on 2003–2022, tuned on 2023 and tested on "
+             "2024–2025, years they never saw.",
+    "ndvi": "NDVI (Normalized Difference Vegetation Index): a satellite "
+            "measure of how green and dense the plants are, from about 0 "
+            "(bare soil) to about 0.9 (dense green crop). From NASA MODIS.",
+    "weather": "Temperature in °C: daily maximum and minimum air "
+               "temperature at 2 m height. Precipitation in mm/day: 1 mm = "
+               "1 litre of rain per square metre.",
+    "gain": "Model miss minus historical-average miss, in dt/ha, per "
+            "district. Negative (blue) = the model was closer to the actual "
+            "yield; positive (red) = the historical average was closer.",
+    "coverage": "Number of districts that reported a yield for that crop in "
+                "that year. Gaps come from missing statistics or district "
+                "boundary changes.",
+    "trend": "Line = median yield across districts; shaded band = the middle "
+             "50% of districts. Yield in dt/ha (decitonnes per hectare; "
+             "1 dt = 100 kg).",
+    "accuracy_w": "Weight on prediction accuracy: lower error in dt/ha ranks "
+                  "higher.",
+    "interp_w": "Weight on interpretability: how easy it is to explain why "
+                "the model predicted what it did (1 = fully transparent).",
+    "compute_w": "Weight on low compute cost: how cheap the model is to train "
+                 "and run (1 = cheapest).",
+    "r2": "R² = share of the variation in yield that the predictions explain "
+          "(1 = perfect). It includes the historical average every model gets "
+          "for free, so compare it with the null, not with 0.",
+    "null": "Climatology null: predicting each district's historical average "
+            "and learning nothing else. A model that scores below it has not "
+            "learned anything useful.",
+    "skill_null": "Model R² minus the null's R². Positive = better than just "
+                  "using the historical average.",
+    "layers": "Actual yield: what was harvested. Predicted yield: what the "
+              "model forecast. Error vs historical average: where the model "
+              "beat (blue) or lost to (red) the historical average. All in "
+              "dt/ha (decitonnes per hectare; 1 dt = 100 kg).",
+    "pred_vs_actual": "Each dot is one district in one test year (2024 or "
+                      "2025). Horizontal: actual yield; vertical: predicted "
+                      "yield, both in dt/ha. Dots on the dotted line were "
+                      "predicted exactly.",
+    "models_listed": "Only models whose predictions on this machine match the "
+                     "official results are listed.",
+    "best_model": "The model that scores best for each crop under the weights "
+                  "you set. With accuracy alone, it is the model with the "
+                  "lowest error.",
+}
 
 
 def divider(label: str = "") -> None:

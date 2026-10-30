@@ -23,4 +23,4 @@ def build_model(name: str, config: dict) -> BaseModel:
 
 
 # Side-effect imports so registration runs at package load
-from . import lstm, dlinear, xgboost_model, tft, patchtst, itransformer  # noqa: F401,E402
+from . import lstm, dlinear, xgboost_model, tft, patchtst, itransformer, tft_native  # noqa: F401,E402

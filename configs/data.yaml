@@ -33,6 +33,7 @@ satellite_composite_days: 10    # 10-day NDVI/EVI/LAI composites
 features:
   past_observed:
     - temperature_air_max_2m
+    - wind_speed          # v10 §2.2 (ERA5-Land 10 m wind); absent in older datasets -> skipped
     - temperature_air_min_2m
     - precipitation_height
     - humidity
@@ -55,6 +56,31 @@ features:
     - ndvi_age_days
     - lai_age_days
     - ndwi_age_days
+    # Water- and energy-stress drivers (ERA5-Land + MODIS fPAR via Earth
+    # Engine; scripts/25, 26, 29). Daily and causal: swroot7 is a trailing
+    # 7-day mean, fpar is carried forward at most 16 days.
+    - swvl1
+    - swvl2
+    - swvl3
+    - swroot7
+    - ssrd
+    - vpd
+    - pet
+    - cwb
+    - hotdry
+    - fpar
+    # Pre-registered arm C indicators (scripts/33; preregistration §4.2)
+    - heavyrain
+    - wetsoil
+    - soiltemp
+    - snowdepth
+    - barefrost
+    - transp_ratio
+    # Pre-registered arm D cropland-only satellite (scripts/33; §4.3)
+    - ndvi_crop
+    - evi_crop
+    - lai_crop
+    - fpar_crop
   static:
     - sand
     - clay

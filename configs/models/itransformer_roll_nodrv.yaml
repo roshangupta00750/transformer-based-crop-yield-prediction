@@ -1,0 +1,16 @@
+# iTransformer (Liu et al., ICLR 2024)
+name: itransformer
+d_model: 128
+n_heads: 8
+n_layers: 3
+d_ff: 256
+dropout: 0.15            # bumped from 0.10 for regularization
+learning_rate: 0.0005
+batch_size: 128
+weight_decay: 0.05       # plumbed through AdamW in src/models/itransformer.py
+# Per-model budget — slight regression at 200/20, sweet spot is 120/15
+max_epochs: 120
+early_stopping_patience: 15
+
+max_minutes: 120         # rolling test: let early stopping decide
+drop_features: [swvl1, swvl2, swvl3, swroot7, ssrd, vpd, pet, cwb, hotdry, fpar]   # baseline arm: no new drivers

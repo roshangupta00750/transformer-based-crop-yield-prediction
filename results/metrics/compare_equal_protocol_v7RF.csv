@@ -1,0 +1,19 @@
+paper,crop,years,n,metric,theirs,ours_equal_protocol,hist_avg,ours_rolling,verdict,beats_hist_avg
+AgroForecast-DE (same districts),winter_wheat,2023-24,424,r2,0.18329688408070033,0.3322655385675798,0.2871912591846001,0.3107613339625843,ours better,True
+AgroForecast-DE (same districts),winter_wheat,2023-24,424,rmse,9.50964528979582,8.598725935431634,8.884208045579062,8.73608856889481,ours better,True
+AgroForecast-DE (same districts),winter_wheat,2023-24,424,mape,12.058378244581997,10.746764465730294,10.86947159498444,10.815384125235067,ours better,True
+AgroForecast-DE (same districts),silage_maize,2023-24,375,r2,0.397720759938044,0.4695499918578585,0.27040814950654835,0.33537002898444135,ours better,True
+AgroForecast-DE (same districts),silage_maize,2023-24,375,rmse,56.59968199439521,53.117456932179714,62.29526410401895,59.4572755409995,ours better,True
+AgroForecast-DE (same districts),silage_maize,2023-24,375,mape,10.853896257898308,9.65605647341003,11.834672725038352,10.79615184358817,ours better,True
+CropFusionNet paper,winter_wheat,2022-24 (their test years),657,r2,0.597,0.5018369680176326,0.48430020926901396,0.4797239077249741,ours worse,True
+CropFusionNet paper,winter_wheat,"2019-24 pooled incl. our validation years 2019-21, as their code",1315,r2,0.597,0.5495205244900847,0.5367665164921769,0.48958186439308404,ours worse,True
+CropFusionNet paper,silage_maize,2022-24 (their test years),590,r2,0.752,0.6630298044895608,0.3252595413859892,0.3557881636640038,ours worse,True
+CropFusionNet paper,silage_maize,"2019-24 pooled incl. our validation years 2019-21, as their code",1193,r2,0.752,0.705819953690457,0.39408876775146806,0.47877107343689296,ours worse,True
+CropFusionNet paper,winter_barley,2022-24 (their test years),614,r2,0.445,0.626090737437119,0.481159611123673,0.5189212602319185,ours better,True
+CropFusionNet paper,winter_barley,"2019-24 pooled incl. our validation years 2019-21, as their code",1236,r2,0.445,0.5971942034909752,0.515108796313476,0.4426214629967735,ours better,True
+Srivastava 2022 CNN,winter_wheat,2017,225,rmse,6.6,7.208176408359282,6.021908517307261,6.597430902583911,ours worse,False
+Srivastava 2022 CNN,winter_wheat,2017,225,mae,5.2,5.753493861152397,4.679190877024211,5.139152836576082,ours worse,False
+Srivastava 2022 CNN,winter_wheat,2018,225,rmse,8.4,10.419834474542881,13.711841358316585,11.701767622738682,ours worse,True
+Srivastava 2022 CNN,winter_wheat,2018,225,mae,7.1,8.442916070613787,11.329939183618812,9.634390049482212,ours worse,True
+Srivastava 2022 CNN,winter_wheat,2019,220,rmse,6.4,8.00518342635053,7.624637313572319,8.797887305693552,ours worse,False
+Srivastava 2022 CNN,winter_wheat,2019,220,mae,5.0,6.150578505986773,5.520448969505108,6.791941310450939,ours worse,False

@@ -1,0 +1,37 @@
+# Pre-registration v20 §2 (paper/preregistration_2026-10-12_v20.md): patchtst17_v17P + crop-stress inputs at the critical stages
+# Pre-registration v17 arm P17: PatchTST (August architecture) on the shared loop; data settings as v12 Q12
+name: patchtst17
+patch_len: 8
+stride: 4
+d_model: 128
+n_heads: 8
+n_layers: 4
+dropout: 0.15
+learning_rate: 0.0003
+batch_size: 128
+max_epochs: 120
+early_stopping_patience: 15
+weight_decay: 0.05
+
+# --- pre-registration controls (identical in all arms) ---
+max_minutes: 120
+resample_len: 220         # same model size in every arm
+common_sample: true       # same crop-years in every arm
+# --- what this arm changes ---
+window: crop_year
+drop_features: [ndvi, evi, lai, fpar]
+# --- v2 ---
+dataset: data/processed/dataset_v5_hybridW.parquet
+phenology: full
+phenology_version: v3
+stage_features: true
+district_anomaly: true
+national: false
+# --- v4 ---
+trend_test: yearly
+# --- v10 ---
+trend_district_ref: true
+# --- v12 ---
+reliable_series: true
+# --- v20 ---
+stress_features: true

@@ -5,17 +5,17 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
 #SBATCH --time=03:00:00
-#SBATCH --output=/home/s517868/slurm_logs/cf-fc-24-%j.out
-#SBATCH --error=/home/s517868/slurm_logs/cf-fc-24-%j.err
+#SBATCH --output=slurm_logs/cf-fc-24-%j.out
+#SBATCH --error=slurm_logs/cf-fc-24-%j.err
 
 # H100 rerun of counterfactual (13_counterfactual_daily.py) and forecast_2024
 # (20_forecast_2024.py). Both consume the shipped 6 checkpoints and produce
 # metric CSVs that the Streamlit Climate + Home pages read.
 set -euo pipefail
-mkdir -p /home/s517868/slurm_logs
-source ~/agri-venv/bin/activate
+mkdir -p slurm_logs
+source "${VENV:-.venv}/bin/activate"   # project environment (requirements.txt)
 export PYTHONUNBUFFERED=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
-cd ~/crop_yield_benchmark
+cd "${SLURM_SUBMIT_DIR:-.}"   # submit from the project root
 
 echo "=== node + GPU ==="
 hostname

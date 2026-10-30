@@ -1,0 +1,69 @@
+{
+  "error_share": {
+    "Germany-wide year effect": 25.23568226992662,
+    "State year effect": 20.296869087491977,
+    "Single district": 54.467448642581395
+  },
+  "persistence_r": 0.19619018511122618,
+  "calibration_slope": 1.1817432572955213,
+  "sd_ratio": 0.4557212116864203,
+  "error_small_vs_large": [
+    14.52427832244166,
+    8.772378368672761
+  ],
+  "worst10_share": 33.04439611947313,
+  "trend_per_decade": {
+    "oats": -3.7644595966117302,
+    "potatoes": -3.3153247675943276,
+    "rye": 1.642120249293065,
+    "silage_maize": -3.571898074518778,
+    "sugar_beet": 9.453351166791487,
+    "summer_barley": -1.7378212302410434,
+    "triticale": 0.33618907623191624,
+    "winter_barley": 7.397405546258538,
+    "winter_rapeseed": -0.46805781513520417,
+    "winter_wheat": -0.17874494257619772
+  },
+  "top_driver": {
+    "oats": [
+      "tmax_summer(JJ)",
+      -0.4351580579221328
+    ],
+    "potatoes": [
+      "rain_summer(JJ)",
+      0.8790542014628667
+    ],
+    "rye": [
+      "rain_autumn_prev(OND)",
+      -0.33497299035040046
+    ],
+    "silage_maize": [
+      "rain_summer(JJ)",
+      0.9162467344283711
+    ],
+    "sugar_beet": [
+      "rain_summer(JJ)",
+      0.8056581329418016
+    ],
+    "summer_barley": [
+      "rain_spring(MAM)",
+      -0.40012887132046193
+    ],
+    "triticale": [
+      "tmax_summer(JJ)",
+      -0.31317085046091686
+    ],
+    "winter_barley": [
+      "rain_autumn_prev(OND)",
+      -0.5006126821968072
+    ],
+    "winter_rapeseed": [
+      "cwb_spring(MAM)",
+      0.3413332639542955
+    ],
+    "winter_wheat": [
+      "tmax_summer(JJ)",
+      -0.32813611481688393
+    ]
+  }
+}

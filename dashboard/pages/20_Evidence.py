@@ -19,7 +19,7 @@ import pandas as pd
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from utils import (CHECKPOINTS_DIR, METRICS_DIR, PROJECT_ROOT,
+from utils import (CHECKPOINTS_DIR, HELP, METRICS_DIR, PROJECT_ROOT,
                    artifact_is_fresh, divider, kpi,
                    load_climatology_baseline, load_multicrop_summary,
                    newest_checkpoint_mtime, page_header)
@@ -65,10 +65,10 @@ else:
 
     k1, k2, k3 = st.columns(3)
     with k1:
-        kpi("Climatology null (mean R2)", f"{null_mean:.3f}")
+        kpi("Climatology null (mean R2)", f"{null_mean:.3f}", help=HELP["null"])
     with k2:
         beat = lb[lb["Mean R2"] > null_mean]
-        kpi("Models beating it", f"{len(beat)} of {len(lb)}")
+        kpi("Models beating it", f"{len(beat)} of {len(lb)}", help=HELP["skill_null"])
     with k3:
         kpi("Best model", f"{lb.iloc[0]['Model']} {lb.iloc[0]['Mean R2']:.3f}")
 
@@ -76,7 +76,10 @@ else:
         lb.style.format({"Mean R2": "{:.3f}", "Skill vs null": "{:+.3f}"})
           .background_gradient(subset=["Skill vs null"], cmap="RdYlGn",
                                vmin=-0.5, vmax=0.5),
-        width="stretch", hide_index=True)
+        width="stretch", hide_index=True, column_config={
+            "Mean R2": st.column_config.NumberColumn(help=HELP["r2"]),
+            "Skill vs null": st.column_config.NumberColumn(help=HELP["skill_null"]),
+        })
 
     st.caption(
         "The null predicts each district's own training baseline and learns no "
@@ -178,6 +181,7 @@ st.caption(
     f"{datetime.fromtimestamp(newest_ckpt).strftime('%Y-%m-%d %H:%M') if newest_ckpt else 'none'}.")
 
 watched = ["multicrop_summary.csv", "climatology_baseline.csv",
+           "test_predictions.csv",
            "taxonomy_validation.csv", "fusion_summary_6models.csv",
            "counterfactual_daily_summary.csv", "multicrop_horizons.csv",
            "spatial_per_district.csv", "loo_xgboost.csv"]
@@ -222,6 +226,15 @@ st.markdown("""
 - **Models cannot express trend.** No feature encodes calendar year
   (deliberately, to avoid leakage), so long-horizon extrapolation is outside
   what this setup supports.
+- **Results depend on library versions.** The same saved XGBoost model gives
+  a winter-wheat error of 10.4 dt/ha under XGBoost 3.3 (on the GPU cluster, where the
+  official results were computed) and 12.3 dt/ha under XGBoost 2.1. Versions
+  must be pinned for the paper; per-district views only show models whose
+  predictions reproduce the official results.
+- **Some districts have short records.** 16 of 281 districts have fewer than
+  five winter-wheat years; Würzburg Landkreis (DE26C) has one.
+- **Every run used the same random seed** (`seed: 42`, deterministic), so
+  run-to-run variation has not been measured yet.
 """)
 
 with st.expander("Data quality", expanded=False):

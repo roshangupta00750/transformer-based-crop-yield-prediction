@@ -5,19 +5,19 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH --time=00:15:00
-#SBATCH --output=/home/s517868/slurm_logs/preflight-%j.out
-#SBATCH --error=/home/s517868/slurm_logs/preflight-%j.err
+#SBATCH --output=slurm_logs/preflight-%j.out
+#SBATCH --error=slurm_logs/preflight-%j.err
 
 # Preflight: verify the whole H100 → data-load → TFT-instantiate → 1-epoch
 # train → checkpoint-save pipeline works end-to-end, without burning 4h.
 # Bracket-sed on configs with EXIT trap so any crash restores originals.
 set -euo pipefail
 
-mkdir -p /home/s517868/slurm_logs
-source ~/agri-venv/bin/activate
+mkdir -p slurm_logs
+source "${VENV:-.venv}/bin/activate"   # project environment (requirements.txt)
 export PYTHONUNBUFFERED=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
 
-cd ~/crop_yield_benchmark
+cd "${SLURM_SUBMIT_DIR:-.}"   # submit from the project root
 
 echo "=== node + GPU ==="
 hostname

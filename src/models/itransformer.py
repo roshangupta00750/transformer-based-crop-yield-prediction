@@ -19,11 +19,39 @@ from ._masking import resample_valid
 from .registry import register
 
 
+# Static covariates that may join the attention as extra tokens, grouped so
+# each group becomes ONE token. landkreis_id is deliberately absent: a district
+# number carries no agronomy and only lets the model memorise districts.
+STATIC_TOKEN_GROUPS = {
+    "crop": lambda n: n.startswith("crop_is_"),
+    "soil": lambda n: n in ("sand", "clay", "soc", "ph", "bulk_density",
+                            "soil_imputed"),
+    "terrain": lambda n: n.startswith(("elevation_", "slope_", "aspect_")),
+}
+
+
+def resolve_static_tokens(static_names: list[str],
+                          groups: list[str]) -> list[list[int]]:
+    """Column indices into x_static for each requested token group."""
+    out = []
+    for g in groups:
+        if g not in STATIC_TOKEN_GROUPS:
+            raise ValueError(f"unknown static token group {g!r}; "
+                             f"choose from {sorted(STATIC_TOKEN_GROUPS)}")
+        idx = [i for i, n in enumerate(static_names) if STATIC_TOKEN_GROUPS[g](n)]
+        if not idx:
+            raise ValueError(f"static token group {g!r} matched no columns in "
+                             f"{static_names}")
+        out.append(idx)
+    return out
+
+
 class _ITransformerNet(nn.Module):
     def __init__(self, n_channels: int, seq_len: int,
                  d_model: int, n_heads: int, n_layers: int,
                  d_ff: int, dropout: float, n_static: int = 0,
-                 attention_axis: str = "variate"):
+                 attention_axis: str = "variate",
+                 static_token_idx: list[list[int]] | None = None):
         super().__init__()
         if attention_axis not in ("variate", "temporal"):
             raise ValueError(f"attention_axis must be variate|temporal, "
@@ -80,6 +108,20 @@ class _ITransformerNet(nn.Module):
         # true in the model config to re-enable the additive path.
         self.n_static = n_static
         n_tokens = n_channels if attention_axis == "variate" else seq_len
+        # CROP-AWARE VARIANT (static_tokens in the model config). Each static
+        # group -- crop identity, soil, terrain -- is embedded into ONE extra
+        # token that sits beside the weather/satellite variate tokens inside
+        # the encoder. Attention can then condition how a dry June is read on
+        # which crop and which soil it is, i.e. the multiplicative modulation
+        # the additive head above cannot express. Without crop identity the
+        # pooled model sees near-identical inputs for wheat, triticale and rye
+        # in the same district-year and can only predict their average.
+        self.static_token_idx = [list(i) for i in (static_token_idx or [])]
+        if self.static_token_idx and attention_axis != "variate":
+            raise ValueError("static tokens require attention_axis='variate'")
+        self.static_embeds = nn.ModuleList(
+            nn.Linear(len(i), d_model) for i in self.static_token_idx)
+        n_tokens += len(self.static_token_idx)
         self.n_tokens = n_tokens
         self.proj = nn.Linear(d_model * n_tokens + n_static, 1)
 
@@ -93,6 +135,10 @@ class _ITransformerNet(nn.Module):
             # the encoder attends across time instead of across variates.
             x = x.transpose(1, 2)
         tokens = self.var_embed(x)                # (B, n_tokens, D)
+        if self.static_token_idx:
+            extra = [emb(x_static[:, idx]) for emb, idx
+                     in zip(self.static_embeds, self.static_token_idx)]
+            tokens = torch.cat([tokens, torch.stack(extra, dim=1)], dim=1)
         encoded = self.encoder(tokens)            # (B, C, D)
         encoded = self.norm(encoded)              # LayerNorm on D
         B, N, D = encoded.shape
@@ -114,21 +160,18 @@ class ITransformerModel(BaseModel):
     def fit(self, train_loader, val_loader=None, *,
             max_epochs: int = 100, lr: float | None = None,
             patience: int = 15, device: str = "cpu",
-            max_minutes: float | None = None):
+            max_minutes: float | None = None,
+            init_state: dict | None = None):
+        """Train; with ``init_state`` (a state_dict of the same architecture)
+        the network starts from those weights instead of a fresh init --
+        per-crop fine-tuning, preregistration v4 §2.2."""
         import time
         self.device = device
         first = next(iter(train_loader))
-        n_static = (first["x_static"].shape[-1]
-                     if self.config.get("use_static_head", False) else 0)
-        T = first["x_past"].shape[1]
-        C = first["x_past"].shape[-1] + first["x_future"].shape[-1]
         c = self.config
-        self.net = _ITransformerNet(
-            n_channels=C, seq_len=T, n_static=n_static,
-            attention_axis=self.config.get("attention_axis", "variate"),
-            d_model=c["d_model"], n_heads=c["n_heads"],
-            n_layers=c["n_layers"], d_ff=c["d_ff"], dropout=c["dropout"],
-        ).to(device)
+        self.net = self._build_net(first, train_loader).to(device)
+        if init_state is not None:
+            self.net.load_state_dict(init_state)
         opt = torch.optim.AdamW(self.net.parameters(),
                                 lr=lr or c["learning_rate"],
                                 weight_decay=c.get("weight_decay", 0.01))
@@ -139,8 +182,12 @@ class ITransformerModel(BaseModel):
         # the loop, so without this the checkpoint saved is the FINAL epoch —
         # `patience` epochs past the optimum, i.e. a deliberately over-fit model.
         best_state = None
-        for _ in range(max_epochs):
+        # learning curve, kept in the run metadata (train loss = mean over the epoch's batches)
+        self.history_, self.best_epoch_, self.stop_reason_ = [], None, "max_epochs"
+        t_start = time.time()
+        for epoch in range(1, max_epochs + 1):
             self.net.train()
+            tr_sum, tr_n = 0.0, 0
             for batch in train_loader:
                 x = torch.cat([batch["x_past"], batch["x_future"]], dim=-1).to(device)
                 msk = batch.get("mask")
@@ -148,24 +195,59 @@ class ITransformerModel(BaseModel):
                 xs = batch["x_static"].to(device)
                 y = batch["y"].to(device)
                 pred = self.net(x, msk, xs)
-                loss = loss_fn(pred, y)
+                if "w" in batch:                       # v15 §4: area-weighted training loss
+                    w = batch["w"].to(device)
+                    loss = (w * (pred - y) ** 2).sum() / w.sum().clamp_min(1e-8)
+                else:
+                    loss = loss_fn(pred, y)
                 opt.zero_grad(); loss.backward(); opt.step()
+                tr_sum += float(loss.item()) * len(y); tr_n += len(y)
 
+            val = self._eval(val_loader, loss_fn) if val_loader is not None else None
+            self.history_.append({"epoch": epoch, "train_loss": tr_sum / max(tr_n, 1), "val_loss": val,
+                                  "seconds": round(time.time() - t_start, 1)})
             if deadline and time.time() > deadline:
+                self.stop_reason_ = "time_cap"     # as before: the timed-out epoch is not a candidate (logging only)
                 break
             if val_loader is None:
                 continue
-            val = self._eval(val_loader, loss_fn)
             if val < best:
-                best, bad = val, 0
+                best, bad, self.best_epoch_ = val, 0, epoch
                 best_state = copy.deepcopy(self.net.state_dict())
             else:
                 bad += 1
                 if bad >= patience:
+                    self.stop_reason_ = "early_stop"
                     break
         if best_state is not None:
             self.net.load_state_dict(best_state)
         return self
+
+    def _build_net(self, first: dict, train_loader) -> nn.Module:
+        """The network for this config and data; subclasses (preregistration v17: TFT,
+        PatchTST) override only this, save and load, so the training loop is shared."""
+        c = self.config
+        n_static = (first["x_static"].shape[-1]
+                    if c.get("use_static_head", False) else 0)
+        # resample_len fixes the model's input length independently of the
+        # padding length, so a longer season window compresses the input
+        # instead of enlarging the model (preregistration §3).
+        T = int(c.get("resample_len") or first["x_past"].shape[1])
+        C = first["x_past"].shape[-1] + first["x_future"].shape[-1]
+        static_idx = None
+        if c.get("static_tokens"):
+            spec = getattr(train_loader.dataset, "spec", None)
+            if spec is None:
+                raise RuntimeError("static_tokens needs the dataset's FeatureSpec")
+            static_idx = resolve_static_tokens(list(spec.static),
+                                               list(c["static_tokens"]))
+        return _ITransformerNet(
+            n_channels=C, seq_len=T, n_static=n_static,
+            static_token_idx=static_idx,
+            attention_axis=c.get("attention_axis", "variate"),
+            d_model=c["d_model"], n_heads=c["n_heads"],
+            n_layers=c["n_layers"], d_ff=c["d_ff"], dropout=c["dropout"],
+        )
 
     @torch.no_grad()
     def _eval(self, loader, loss_fn):
@@ -196,6 +278,7 @@ class ITransformerModel(BaseModel):
     def save(self, path):
         torch.save({
             "n_static": getattr(self.net, "n_static", 0),
+            "static_token_idx": getattr(self.net, "static_token_idx", []),
             "attention_axis": getattr(self.net, "attention_axis", "variate"),
             "state_dict": self.net.state_dict(),
             "config": self.config,
@@ -213,6 +296,7 @@ class ITransformerModel(BaseModel):
             n_layers=c["n_layers"], d_ff=c["d_ff"], dropout=c["dropout"],
             n_static=ckpt.get("n_static", 0),
             attention_axis=ckpt.get("attention_axis", "variate"),
+            static_token_idx=ckpt.get("static_token_idx") or None,
         )
         self.net.load_state_dict(ckpt["state_dict"])
         return self

@@ -1,0 +1,16 @@
+paper,crop,test_years,metric,their_value,ours_value,hist_avg_value,same_districts,notes
+AgroForecast-DE (geonextgis 2026; operational CropFusionNet),winter_wheat,2023-24 pooled,R2,0.180,0.311,0.316,yes (424),head-to-head; their published full-sample R2 0.196
+AgroForecast-DE (geonextgis 2026; operational CropFusionNet),winter_wheat,2023-24 pooled,RMSE dt/ha,9.53,8.74,8.70,yes (424),
+AgroForecast-DE (geonextgis 2026; operational CropFusionNet),winter_wheat,2023-24 pooled,MAPE %,12.08,10.82,10.96,yes (424),
+AgroForecast-DE (geonextgis 2026; operational CropFusionNet),silage_maize,2023-24 pooled,R2,0.398,0.335,0.419,yes (375),their published full-sample R2 0.361
+AgroForecast-DE (geonextgis 2026; operational CropFusionNet),silage_maize,2023-24 pooled,RMSE dt/ha,56.60,59.46,55.62,yes (375),
+AgroForecast-DE (geonextgis 2026; operational CropFusionNet),silage_maize,2023-24 pooled,MAPE %,10.85,10.80,10.34,yes (375),
+Srivastava et al. 2022 Sci Rep (CNN),winter_wheat,2017,RMSE dt/ha,6.6,6.60,6.41,no,they use observed sowing/flowering/harvest dates; train<=Y-1; paper states HPs set for lowest test error; validation = random CV within 1999-2016
+Srivastava et al. 2022 Sci Rep (CNN),winter_wheat,2018,RMSE dt/ha,8.4,11.70,13.13,no,
+Srivastava et al. 2022 Sci Rep (CNN),winter_wheat,2019,RMSE dt/ha,6.4,8.80,8.52,no,
+Srivastava et al. 2022 Sci Rep (CNN),winter_wheat,2017,MAE dt/ha,5.2,5.14,4.97,no,
+Srivastava et al. 2022 Sci Rep (CNN),winter_wheat,2018,MAE dt/ha,7.1,9.63,10.81,no,
+Srivastava et al. 2022 Sci Rep (CNN),winter_wheat,2019,MAE dt/ha,5.0,6.79,6.36,no,
+CropFusionNet (Srivastava et al. 2026; TFT-inspired),winter_wheat,pooled from 2019 (years not stated in paper; code pools val+test >=2019),R2,0.597,0.490,0.492,no,their val years used for early stop + HP search; inputs cut at observed maturity date
+CropFusionNet (Srivastava et al. 2026; TFT-inspired),silage_maize,pooled from 2019 (years not stated in paper; code pools val+test >=2019),R2,0.752,0.479,0.379,no,
+CropFusionNet (Srivastava et al. 2026; TFT-inspired),winter_barley,pooled from 2019 (years not stated in paper; code pools val+test >=2019),R2,0.445,0.443,0.492,no,

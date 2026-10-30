@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
 #SBATCH --time=03:00:00
-#SBATCH --output=/home/s517868/slurm_logs/tax-fusion-%j.out
-#SBATCH --error=/home/s517868/slurm_logs/tax-fusion-%j.err
+#SBATCH --output=slurm_logs/tax-fusion-%j.out
+#SBATCH --error=slurm_logs/tax-fusion-%j.err
 
 # Regenerates the two artefacts still dated Jul 21, i.e. still derived from
 # leakage-contaminated checkpoints:
@@ -22,11 +22,11 @@
 # Submit with --dependency=afterany:<eval job>.
 
 set -euo pipefail
-mkdir -p /home/s517868/slurm_logs
-source ~/agri-venv/bin/activate
+mkdir -p slurm_logs
+source "${VENV:-.venv}/bin/activate"   # project environment (requirements.txt)
 export PYTHONUNBUFFERED=1 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4
 export CROP_YIELD_DEVICE=cuda
-cd ~/crop_yield_benchmark
+cd "${SLURM_SUBMIT_DIR:-.}"   # submit from the project root
 
 echo "=== $(date '+%F %H:%M:%S') inputs ==="
 ls -l results/metrics/multicrop_summary.csv

@@ -17,8 +17,8 @@
 set -uo pipefail
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=TRUE
 cd "$(dirname "$0")/.."
-source /Users/roshangupta/miniconda3/etc/profile.d/conda.sh
-conda activate agri
+# use the project environment if it exists; otherwise the Python that is already active
+[ -f "${VENV:-.venv}/bin/activate" ] && source "${VENV:-.venv}/bin/activate"
 
 GEE_PARQUET="data/raw/gee/gee_satellite.parquet"
 LOG="/tmp/chain_after_gee.log"

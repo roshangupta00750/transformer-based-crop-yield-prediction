@@ -214,3 +214,37 @@ class PatchTSTModel(BaseModel):
         )
         self.net.load_state_dict(ckpt["state_dict"])
         return self
+
+
+# --------------------------------------------------------------------------- #
+# Preregistration v17 arm P17: the same network on the shared iTransformer training loop
+# (resample_len, init_state for per-crop fine-tuning, weight decay, sample weights).
+# The class above is left as it was for the August archive.
+# --------------------------------------------------------------------------- #
+from .itransformer import ITransformerModel  # noqa: E402
+
+
+@register
+class PatchTST17Model(ITransformerModel):
+    name = "patchtst17"
+
+    def _build_net(self, first: dict, train_loader) -> nn.Module:
+        c = self.config
+        T = int(c.get("resample_len") or first["x_past"].shape[1])
+        C = first["x_past"].shape[-1] + first["x_future"].shape[-1]
+        return _PatchTSTNet(n_channels=C, seq_len=T, n_static=0, patch_len=c["patch_len"], stride=c["stride"],
+                            d_model=c["d_model"], n_heads=c["n_heads"], n_layers=c["n_layers"],
+                            dropout=c["dropout"])
+
+    def save(self, path):
+        torch.save({"state_dict": self.net.state_dict(), "config": self.config, "seq_len": self.net.seq_len,
+                    "n_channels": self.net.n_channels}, path)
+
+    def load(self, path):
+        ck = torch.load(path, map_location="cpu")
+        self.config = c = ck["config"]
+        self.net = _PatchTSTNet(n_channels=ck["n_channels"], seq_len=ck["seq_len"], n_static=0,
+                                patch_len=c["patch_len"], stride=c["stride"], d_model=c["d_model"],
+                                n_heads=c["n_heads"], n_layers=c["n_layers"], dropout=c["dropout"])
+        self.net.load_state_dict(ck["state_dict"])
+        return self

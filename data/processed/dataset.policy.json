@@ -61,7 +61,31 @@
     "temperature_air_min_2m_missing",
     "ndvi_missing",
     "evi_missing",
-    "lai_missing"
+    "lai_missing",
+    "swvl1",
+    "swvl2",
+    "swvl3",
+    "swroot7",
+    "ssrd",
+    "vpd",
+    "pet",
+    "fpar",
+    "cwb",
+    "hotdry",
+    "soiltemp",
+    "snowdepth",
+    "transp_ratio",
+    "wetsoil",
+    "heavyrain",
+    "barefrost",
+    "ndvi_crop",
+    "evi_crop",
+    "lai_crop",
+    "fpar_crop"
   ],
-  "missing_value_policy": "bounded_causal_ffill_then_train_mean"
+  "missing_value_policy": "bounded_causal_ffill_then_train_mean",
+  "notes": [
+    "20260924T084914: merged daily drivers ['swvl1', 'swvl2', 'swvl3', 'swroot7', 'ssrd', 'vpd', 'pet', 'cwb', 'hotdry', 'fpar'] (ERA5-Land + MODIS fPAR via Earth Engine); causal, policy version unchanged",
+    "20260926T183730: merged pre-registered arm C ['heavyrain', 'wetsoil', 'soiltemp', 'snowdepth', 'barefrost', 'transp_ratio'] and arm D ['ndvi_crop', 'evi_crop', 'lai_crop', 'fpar_crop'] (paper/preregistration_2026-09-26.md); causal, policy version unchanged"
+  ]
 }

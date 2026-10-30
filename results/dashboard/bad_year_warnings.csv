@@ -1,0 +1,4 @@
+warning_rule,bad_years_warned,bad_years_missed,warnings_in_other_years,other_years_quiet
+predicted below normal,14,1,62,83
+predicted ≥5% below normal,12,3,14,131
+predicted ≥10% below normal,8,7,1,144

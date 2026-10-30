@@ -1,0 +1,21 @@
+# Pre-registered arm A (paper/preregistration_2026-09-26.md): control, 1 Jan -> harvest
+name: itransformer
+d_model: 128
+n_heads: 8
+n_layers: 3
+d_ff: 256
+dropout: 0.15            # bumped from 0.10 for regularization
+learning_rate: 0.0005
+batch_size: 128
+weight_decay: 0.05       # plumbed through AdamW in src/models/itransformer.py
+# Per-model budget — slight regression at 200/20, sweet spot is 120/15
+max_epochs: 120
+early_stopping_patience: 15
+
+# --- pre-registration controls (identical in all arms) ---
+max_minutes: 120
+resample_len: 220         # same model size in every arm
+common_sample: true       # same crop-years in every arm
+# --- what this arm changes ---
+window: calendar
+drop_features: [heavyrain, wetsoil, soiltemp, snowdepth, barefrost, transp_ratio, ndvi_crop, evi_crop, lai_crop, fpar_crop]

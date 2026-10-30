@@ -13,4 +13,9 @@ export MKL_NUM_THREADS=1
 export KMP_DUPLICATE_LIB_OK=TRUE
 
 cd "$(dirname "$0")/.."   # cd into crop_yield_benchmark project root
-exec streamlit run dashboard/Home.py "$@"
+# use the project environment (requirements.txt) if it exists; set VENV to use another one
+if [ -f "${VENV:-.venv}/bin/activate" ]; then source "${VENV:-.venv}/bin/activate"; fi
+python scripts/63_dashboard_data.py >/dev/null   # refresh results/dashboard/ from the latest evaluations
+# localhost only: without --server.address, Streamlit listens on every network interface,
+# so anyone on the same Wi-Fi/VPN could open the dashboard. Pass --server.address 0.0.0.0 to share.
+exec streamlit run dashboard/main.py --server.port 8502 --server.address 127.0.0.1 "$@"

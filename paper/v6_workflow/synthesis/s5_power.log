@@ -1,0 +1,8 @@
+k=1: H16 F+R vs F (ref y_hist)  P(rule passes)=1.00  P(point estimate >0)=1.00
+k=2: H16 F+R vs F (ref y_hist)  P(rule passes)=1.00  P(point estimate >0)=1.00
+k=3: H16 F+R vs F (ref y_hist)  P(rule passes)=1.00  P(point estimate >0)=1.00
+k=4: H16 F+R vs F (ref y_hist)  P(rule passes)=1.00  P(point estimate >0)=1.00
+k=1: H15 F vs B5               P(rule passes)=0.59  P(point estimate >0)=0.59
+k=2: H15 F vs B5               P(rule passes)=0.36  P(point estimate >0)=0.71
+k=3: H15 F vs B5               P(rule passes)=0.45  P(point estimate >0)=0.80
+k=4: H15 F vs B5               P(rule passes)=0.33  P(point estimate >0)=0.87

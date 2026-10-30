@@ -1,38 +1,150 @@
-# Core
-numpy>=1.26
-pandas>=2.1
-scipy>=1.11
-scikit-learn>=1.4
-pyyaml>=6.0
-tqdm>=4.66
+# Requirements of the project "Transformer-based Crop Yield Prediction using Multivariate Timeseries Datasets"
+#
+# Every version below is the one actually installed when the work was done (pip freeze, October 2026).
+#
+# Stack
+#   Python        3.9.6 in the project environment .venv (macOS): data checks, rolling evaluation, sealed
+#                 forecasts, dashboard, report figures, tests. Create it with:
+#                     python3.9 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+#   Python        3.11.11 in the conda environment "agri" (macOS): early phase (data download with wetterdienst,
+#                 six-model benchmark with pytorch-forecasting). Those packages are at the end of this file and
+#                 are installed only on Python 3.11 or newer.
+#   Training      GPU cluster of the University of Würzburg: Debian 13, SLURM, NVIDIA L40 and L40S GPUs
+#                 (48 GB), a few early versions on H100. Same code, in a virtual environment on the cluster with
+#                 a CUDA build of PyTorch. Its exact package list is not recorded here; record it with
+#                 "pip freeze" on the cluster when needed. The job scripts are scripts/sbatch_*.sh.
+#   Operating     macOS 15.7 for development, Debian 13 on the cluster.
+#   Report        TeX Live 2024 (pdfTeX 1.40.26) with KOMA-Script, lineno, microtype, TikZ, booktabs, tabularx,
+#                 hyperref, fancyhdr and babelbib. Build with Paper_Agriculture/build.sh.
+#   Accounts      Google Earth Engine (satellite data) and Copernicus Climate Data Store (ERA5-Land), only
+#                 needed to download the raw data again.
+#   Browser       Chromium for Playwright (dashboard screenshots), installed with: playwright install chromium
 
-# Deep learning (laptop-friendly: PyTorch + a couple of TS libraries)
-torch>=2.2
-pytorch-lightning>=2.2
-pytorch-forecasting>=1.0      # provides TFT, NHiTS, etc.
-einops>=0.7                   # used by PatchTST/iTransformer impls
+# Numerics and data handling
+numpy==1.26.4
+pandas==2.3.3
+scipy==1.13.1
+scikit-learn==1.6.1
+pyarrow==21.0.0
+PyYAML==6.0.3
+tqdm==4.70.1
 
-# Tree baseline
-xgboost>=2.0
+# Neural networks (iTransformer, TFT, PatchTST) and the XGBoost reference
+torch==2.2.2
+xgboost==2.1.4
 
-# Time-series convenience (optional - keep for Darts implementations)
-darts>=0.27
+# Geodata: district shapes, rasters and gridded weather
+geopandas==1.0.1
+shapely==2.0.7
+pyproj==3.6.1
+pyogrio==0.11.1
+rasterio==1.4.3
+xarray==2024.7.0
+netCDF4==1.7.2
 
-# Geospatial / data acquisition
-wetterdienst>=0.79            # DWD weather (German Weather Service)
-earthengine-api>=0.1.395      # Sentinel-2 / MODIS via GEE
-geopandas>=0.14
-rasterio>=1.3
-xarray>=2024.1
-netcdf4>=1.6
+# Data download: Google Earth Engine, Copernicus CDS, web sources
+earthengine-api==1.6.15
+google-api-python-client==2.198.0
+cdsapi==0.7.7
+requests==2.32.5
 
-# Plotting & analysis
-matplotlib>=3.8
-seaborn>=0.13
-plotly>=5.18
+# Dashboard
+streamlit==1.50.0
+plotly==7.1.0
+folium==0.20.0
+streamlit-folium==0.25.3
+branca==0.8.2
 
-# Dev / testing
-pytest>=8.0
-black>=24.0
-ruff>=0.3
-jupyter>=1.0
+# Report figures
+matplotlib==3.9.4
+
+# Tests and checks
+pytest==8.4.2
+playwright==1.60.0
+
+# Supporting libraries, installed as dependencies of the packages above
+affine==3.0.1
+altair==5.5.0
+attrs==26.1.0
+blinker==1.9.0
+cachetools==6.2.6
+certifi==2026.7.22
+cffi==2.0.0
+cftime==1.6.4.post1
+charset-normalizer==3.5.1
+click==8.1.8
+click-plugins==1.1.1.2
+cligj==0.7.2
+contourpy==1.3.0
+cryptography==50.0.1
+cycler==0.12.1
+ecmwf-datastores-client==0.5.1
+exceptiongroup==1.3.1
+filelock==3.19.1
+fonttools==4.60.2
+fsspec==2025.10.0
+gitdb==4.0.12
+GitPython==3.1.62
+google-api-core==2.30.3
+google-auth==2.50.0
+google-auth-httplib2==0.3.1
+google-cloud-core==2.5.1
+google-cloud-storage==3.9.0
+google-crc32c==1.8.0
+google-resumable-media==2.8.2
+googleapis-common-protos==1.75.0
+greenlet==3.2.5
+httplib2==0.32.0
+idna==3.20
+importlib_metadata==8.7.1
+importlib_resources==6.5.2
+iniconfig==2.1.0
+Jinja2==3.1.6
+joblib==1.5.3
+jsonschema==4.25.1
+jsonschema-specifications==2025.9.1
+kiwisolver==1.4.7
+MarkupSafe==3.0.3
+mpmath==1.3.0
+multiurl==0.3.9
+narwhals==2.21.0
+networkx==3.2.1
+packaging==25.0
+pillow==11.3.0
+pluggy==1.6.0
+proto-plus==1.27.2
+protobuf==6.33.6
+pyasn1==0.6.4
+pyasn1_modules==0.4.2
+pycparser==2.23
+pydeck==0.9.3
+pyee==13.0.1
+Pygments==2.21.0
+pyparsing==3.3.3
+python-dateutil==2.9.0.post0
+pytz==2026.3.post1
+referencing==0.36.2
+rpds-py==0.27.1
+six==1.17.0
+smmap==5.0.3
+sympy==1.14.0
+tenacity==9.1.2
+threadpoolctl==3.6.0
+toml==0.10.2
+tomli==2.4.1
+tornado==6.5.10
+typing_extensions==4.16.0
+tzdata==2026.3
+uritemplate==4.2.0
+urllib3==2.6.3
+xyzservices==2026.9.1
+zipp==3.23.1
+
+# Early phase only (conda environment "agri", Python 3.11.11): DWD downloads, zonal statistics and the first
+# six-model benchmark. Not needed for the final model.
+lightning==2.6.1 ; python_version >= "3.11"
+pytorch-lightning==2.4.0 ; python_version >= "3.11"
+pytorch-forecasting==1.8.0 ; python_version >= "3.11"
+einops==0.8.2 ; python_version >= "3.11"
+wetterdienst==0.121.0 ; python_version >= "3.11"
+rasterstats==0.21.0 ; python_version >= "3.11"

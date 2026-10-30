@@ -9,7 +9,7 @@ sidecar/metadata health are all still here, collapsed one click away.
 
 Every number rendered here is read from disk. Nothing is hardcoded and nothing
 is estimated. Heavy runs go to SLURM via `scripts/sbatch_*.sh`; this page only
-launches local / SSH jobs and knows nothing about cluster queue state.
+launches local jobs and knows nothing about cluster queue state.
 """
 from __future__ import annotations
 
@@ -25,8 +25,8 @@ import streamlit as st
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from utils import (CHECKPOINTS_DIR, GPU_BLOCKLIST, GPU_HOST, METRICS_DIR,
-                   MODEL_INFO, MODELS, PROJECT_ROOT, _gpu_reachable, divider,
+from utils import (CHECKPOINTS_DIR, HELP, METRICS_DIR,
+                   MODEL_INFO, MODELS, PROJECT_ROOT, divider,
                    launch_training, load_climatology_baseline,
                    load_multicrop_summary, page_header, process_alive,
                    stop_process, tail)
@@ -45,12 +45,6 @@ META_PAIR_TOLERANCE_S = 300
 # --------------------------------------------------------------------------- #
 # Cached disk scans
 # --------------------------------------------------------------------------- #
-@st.cache_data(ttl=30)
-def gpu_probe() -> bool:
-    """Cache the 3-second SSH reachability probe so reruns stay responsive."""
-    return _gpu_reachable()
-
-
 @st.cache_data(ttl=300)
 def crop_list() -> list[str]:
     """Crops from configs/data.yaml (cheap — avoids loading the 57 MB parquet)."""
@@ -240,7 +234,6 @@ page_header("Training console",
             "What is trained, and how to launch a run. Detail sits in the "
             "collapsed sections at the foot of the page.")
 
-gpu_up = gpu_probe()
 summary = load_multicrop_summary()
 clim = load_climatology_baseline()
 ckpts = scan_checkpoints()
@@ -291,18 +284,22 @@ n_unscored = int((inv["crops_evaluated"] == 0).sum()) if not inv.empty else 0
 # PRIMARY 1 — what is on disk, and is any of it better than learning nothing
 # --------------------------------------------------------------------------- #
 k1, k2, k3, k4, k5 = st.columns(5)
-k1.metric("Checkpoints on disk", str(len(inv)))
+k1.metric("Checkpoints on disk", str(len(inv)),
+          help="Saved trained models in results/checkpoints/.")
 k2.metric("Newest",
           inv["trained_at"].max().strftime("%m-%d %H:%M") if not inv.empty else "—")
 if not model_means.empty:
-    k3.metric(f"Best mean R² ({model_means.index[0]})", f"{model_means.iloc[0]:.3f}")
+    k3.metric(f"Best mean R² ({model_means.index[0]})", f"{model_means.iloc[0]:.3f}",
+              help=HELP["r2"])
 else:
     k3.metric("Best mean R²", "no eval")
 k4.metric("Climatology baseline R²",
-          f"{clim_mean:.3f}" if clim_mean is not None else "not computed")
+          f"{clim_mean:.3f}" if clim_mean is not None else "not computed",
+          help=HELP["null"])
 if clim_mean is not None and not model_means.empty:
     k5.metric("Models beating it",
-              f"{int((model_means > clim_mean).sum())} of {len(model_means)}")
+              f"{int((model_means > clim_mean).sum())} of {len(model_means)}",
+              help=HELP["skill_null"])
 else:
     k5.metric("Models beating it", "—")
 
@@ -381,21 +378,10 @@ with left:
              "baseline. On: it predicts absolute yield, and is credited for "
              "knowing that baseline. The two tracks write different files.",
     )
-    force_local = st.checkbox(
-        "Force local CPU (skip GPU box)", value=False,
-        help="Override auto-routing and run on this laptop's CPU.",
-    )
     start = st.button("Start training", type="primary", disabled=busy,
                       width="stretch")
 
-if force_local:
-    target = "local CPU (forced)"
-elif model in GPU_BLOCKLIST:
-    target = f"local CPU ({model} is on the GPU blocklist)"
-elif gpu_up:
-    target = f"GPU box `{GPU_HOST}`"
-else:
-    target = "local CPU (GPU box unreachable)"
+target = "this computer"
 
 # Destination artefacts — computed with exactly the rule scripts/03_train.py
 # applies, so the overwrite consequence is visible before launch.
@@ -428,18 +414,14 @@ with right:
             f"appear in multicrop_summary.csv. Per-crop checkpoints are read "
             f"back for TFT only."
         )
-    st.caption(
-        f"GPU box `{GPU_HOST}`: " + ("reachable" if gpu_up else "unreachable")
-        + f" · GPU-blocklisted: `{', '.join(sorted(GPU_BLOCKLIST)) or 'none'}`"
-        + " · SLURM queue state (`scripts/sbatch_*.sh`) is not visible here."
-    )
+    st.caption("Runs on this computer. Large runs go to a SLURM cluster through "
+               "`scripts/sbatch_*.sh`; their queue state is not visible here.")
 
 if start:
     extra = (["--no-anomaly"] if no_anomaly else [])
     if suffix:
         extra += ["--suffix", suffix]
-    pid, log, location = launch_training(model, crop, extra,
-                                         force_local=force_local)
+    pid, log, location = launch_training(model, crop, extra)
     st.session_state.update({
         "running_pid": pid,
         "running_log": log,
@@ -473,7 +455,7 @@ def _render_live() -> None:
     elapsed = int(time.time() - st.session_state.get("running_started",
                                                      time.time()))
     mins, secs = divmod(elapsed, 60)
-    where = "GPU box (remote)" if location == "remote" else "local CPU"
+    where = "this computer"
 
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Run", st.session_state.get("running_name", "—"))

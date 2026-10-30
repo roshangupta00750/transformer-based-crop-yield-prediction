@@ -1,0 +1,24 @@
+{
+  "feature_policy_version": 3,
+  "models": [
+    "xgboost",
+    "dlinear",
+    "itransformer",
+    "lstm",
+    "patchtst",
+    "tft"
+  ],
+  "crops": [
+    "winter_wheat",
+    "winter_barley",
+    "rye",
+    "triticale",
+    "winter_rapeseed",
+    "summer_barley",
+    "oats",
+    "silage_maize",
+    "potatoes",
+    "sugar_beet"
+  ],
+  "completed_pairs": 60
+}

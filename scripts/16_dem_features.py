@@ -21,6 +21,8 @@ Silent-bug prevention (per land-eng workflow):
 """
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 import sys
 import warnings
@@ -45,7 +47,16 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 VRT = STAGE / "copdem90_de.vrt"
 DEM_3035 = STAGE / "copdem90_de_3035.tif"
-GDAL = "/Users/roshangupta/miniconda3/envs/agri/bin"
+# GDAL command-line tools: from $GDAL_BIN if set, otherwise whatever is on the PATH
+GDAL = os.environ.get("GDAL_BIN", "")
+
+
+def gdal(tool: str) -> str:
+    if GDAL:
+        return str(Path(GDAL) / tool)
+    if shutil.which(tool) is None:
+        sys.exit(f"{tool} not found: install GDAL or set GDAL_BIN to the folder that holds it")
+    return tool
 
 
 def run(cmd: list[str], desc: str) -> None:
@@ -61,7 +72,7 @@ def step_1_build_vrt() -> None:
         print(f"  ✓ VRT already exists ({VRT.name}, {len(tiles)} source tiles)")
         return
     print(f"  building VRT over {len(tiles)} GLO-90 tiles...")
-    run([f"{GDAL}/gdalbuildvrt", "-q", str(VRT)] + [str(t) for t in tiles],
+    run([gdal("gdalbuildvrt"), "-q", str(VRT)] + [str(t) for t in tiles],
         "gdalbuildvrt")
 
 
@@ -69,7 +80,7 @@ def step_2_reproject() -> None:
     if DEM_3035.exists() and DEM_3035.stat().st_size > 0:
         print(f"  ✓ reprojected 90m DEM already exists ({DEM_3035.name})")
         return
-    run([f"{GDAL}/gdalwarp",
+    run([gdal("gdalwarp"),
          "-q", "-overwrite",
          "-t_srs", "EPSG:3035",
          "-tr", "90", "90",

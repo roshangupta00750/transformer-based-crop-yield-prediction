@@ -1,0 +1,99 @@
+1999-2002 file cols: ['landkreis', 'crop', 'year', 'yield_dt_per_ha'] [2002 1999 2000 2001]
+reconstruction b2 vs y_hist (2016-25): median |diff| 0.000, 90% 3.396, max 176.92; rel median 0.000%
+by crop median |b2 - y_hist|: {'oats': 0.0, 'potatoes': 0.0, 'rye': 0.0, 'silage_maize': 0.0, 'sugar_beet': 5.64, 'summer_barley': 0.0, 'triticale': 0.0, 'winter_barley': 0.0, 'winter_rapeseed': 0.0, 'winter_wheat': 0.0}
+
+=== 2016-25: MSE skill (row = crop) ===
+                 F_vs_yhist  F_vs_B1  F_vs_B5  B1_vs_yhist  B5_vs_yhist
+crop                                                                   
+oats                  0.212    0.192    0.137        0.024        0.087
+potatoes              0.173    0.147    0.149        0.030        0.028
+rye                   0.041    0.001    0.057        0.040       -0.017
+silage_maize          0.478    0.470    0.461        0.016        0.032
+sugar_beet            0.406    0.413    0.404       -0.011        0.004
+summer_barley         0.181    0.181    0.166        0.001        0.018
+triticale             0.038    0.007    0.081        0.031       -0.047
+winter_barley         0.246    0.353    0.229       -0.165        0.022
+winter_rapeseed       0.031   -0.045    0.160        0.073       -0.154
+winter_wheat          0.019   -0.016    0.062        0.034       -0.046
+MACRO                 0.182    0.170    0.191        0.007       -0.007
+MAPE: F 12.23 | y_hist 14.07 | B1 14.01 | B5 13.80
+  wheat MAPE: F 9.29 | y_hist 9.25 | B1 9.11 | B5 9.45
+
+=== 2018-25: MSE skill (row = crop) ===
+                 F_vs_yhist  F_vs_B1  F_vs_B5  B1_vs_yhist  B5_vs_yhist
+crop                                                                   
+oats                  0.237    0.218    0.150        0.024        0.103
+potatoes              0.210    0.183    0.182        0.033        0.034
+rye                   0.065    0.032    0.053        0.035        0.013
+silage_maize          0.520    0.514    0.503        0.013        0.035
+sugar_beet            0.414    0.431    0.389       -0.028        0.042
+summer_barley         0.179    0.181    0.178       -0.002        0.002
+triticale             0.112    0.084    0.120        0.031       -0.010
+winter_barley         0.233    0.382    0.304       -0.241       -0.101
+winter_rapeseed       0.011   -0.048    0.153        0.056       -0.168
+winter_wheat          0.039    0.005    0.083        0.034       -0.048
+MACRO                 0.202    0.198    0.211       -0.004       -0.010
+MAPE: F 12.60 | y_hist 14.81 | B1 14.81 | B5 14.46
+  wheat MAPE: F 9.58 | y_hist 9.61 | B1 9.47 | B5 9.79
+
+=== 2019-25: MSE skill (row = crop) ===
+                 F_vs_yhist  F_vs_B1  F_vs_B5  B1_vs_yhist  B5_vs_yhist
+crop                                                                   
+oats                  0.207    0.184    0.089        0.027        0.129
+potatoes              0.126    0.082    0.041        0.048        0.089
+rye                  -0.054   -0.093   -0.249        0.036        0.156
+silage_maize          0.471    0.456    0.447        0.028        0.044
+sugar_beet            0.276    0.234    0.250        0.054        0.035
+summer_barley         0.153    0.096    0.095        0.064        0.064
+triticale             0.026    0.002   -0.100        0.023        0.114
+winter_barley         0.179    0.367    0.119       -0.296        0.069
+winter_rapeseed      -0.056   -0.102    0.042        0.042       -0.103
+winter_wheat         -0.084   -0.120   -0.209        0.032        0.103
+MACRO                 0.124    0.111    0.052        0.006        0.070
+MAPE: F 12.24 | y_hist 13.66 | B1 13.59 | B5 12.76
+  wheat MAPE: F 9.46 | y_hist 8.90 | B1 8.78 | B5 8.49
+
+=== 2010-15 baseline-only: MSE skill ===
+                 B1_vs_b2  B5_vs_b2
+crop                               
+oats                0.043     0.039
+potatoes            0.007     0.049
+rye                 0.065     0.083
+silage_maize       -0.007    -0.033
+sugar_beet          0.101     0.203
+summer_barley       0.067     0.219
+triticale           0.071     0.141
+winter_barley       0.061     0.164
+winter_rapeseed     0.068     0.049
+winter_wheat        0.063     0.152
+MACRO               0.054     0.107
+MAPE: b2 13.14 | B1 12.79 | B5 12.34
+
+=== 2008-15 baseline-only: MSE skill ===
+                 B1_vs_b2  B5_vs_b2
+crop                               
+oats                0.040     0.028
+potatoes            0.016     0.046
+rye                 0.071     0.089
+silage_maize        0.011    -0.017
+sugar_beet          0.102     0.217
+summer_barley       0.058     0.193
+triticale           0.072     0.122
+winter_barley       0.058     0.160
+winter_rapeseed     0.067     0.129
+winter_wheat        0.059     0.124
+MACRO               0.055     0.109
+MAPE: b2 12.32 | B1 11.97 | B5 11.54
+
+per-year macro skill:
+  year  F_vs_yhist  F_vs_B1  F_vs_B5  B5_vs_yhist
+ 2016       0.007   -0.057   -0.060        0.061
+ 2017       0.116    0.069    0.128       -0.094
+ 2018       0.477    0.484    0.601       -0.324
+ 2019       0.290    0.201    0.134        0.154
+ 2020      -0.013   -0.057   -0.315        0.225
+ 2021      -0.150   -0.194   -0.158       -0.134
+ 2022       0.223    0.214    0.097        0.115
+ 2023       0.150    0.119    0.026        0.087
+ 2024      -0.035   -0.003    0.080       -0.177
+ 2025       0.011    0.057   -0.037        0.017

@@ -8,7 +8,7 @@ learning_rate: 0.001
 batch_size: 128
 # LSTM broadcasts statics to every timestep. Adding the 15 land-eng features
 # on top of the original 6 diluted the temporal signal (regression 0.502 →
-# 0.294 on julia2 vs samal). Keep LSTM restricted to the original 6 soil +
+# 0.294 in two different cluster environments). Keep LSTM restricted to the original 6 soil +
 # landkreis statics; other models use the safe static list in data.yaml.
 # static_features override REMOVED. It pinned the list to 7 entries and so
 # silently bypassed configs/data.yaml, which is meant to be the single source
