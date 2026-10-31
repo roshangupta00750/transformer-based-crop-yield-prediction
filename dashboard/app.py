@@ -658,10 +658,11 @@ def district_figure(values: pd.Series, label: str, scale, *, diverging=False, cl
     v = v_all[keep]
     fig = go.Figure()
     zoom = (state != "All states" or region != "All regions") and len(v)
-    if not zoom:
-        for xs, ys in outline:
-            fig.add_trace(go.Scattergeo(lon=xs, lat=ys, mode="lines", line=dict(color=LGREY, width=0.8),
-                                        hoverinfo="skip", showlegend=False))
+    if not zoom:                                  # one trace for mainland and islands (None breaks the line)
+        lon = [c for xs, _ in outline for c in list(xs) + [None]]
+        lat = [c for _, ys in outline for c in list(ys) + [None]]
+        fig.add_trace(go.Scattergeo(lon=lon, lat=lat, mode="lines", line=dict(color=LGREY, width=0.8),
+                                    hoverinfo="skip", showlegend=False))
     if len(v):
         kw = {}
         if diverging:
@@ -1198,6 +1199,7 @@ if view == "Map":
             f"iTransformer, PatchTST) plus a district error memory.\n"
             f"- **Test:** each season {FIRST_YEAR}–{LAST_YEAR} forecast by a model trained only on earlier seasons "
             f"(backtest); the {FC_YEAR} forecast sealed with a SHA-256 fingerprint before the official figures.\n"
+            "- **This dashboard online:** yieldformer-de.streamlit.app\n"
             "- **Code:** github.com/roshangupta00750/transformer-based-crop-yield-prediction · **Model and data:** "
             "huggingface.co/Roshangupta007/YieldFormer-DE · **Report:** the written project report (JMU Würzburg).")
 

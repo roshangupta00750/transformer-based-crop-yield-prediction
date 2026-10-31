@@ -45,6 +45,11 @@ earlier seasons. This covers 37,383 district-crop-years in 363 districts.
 - Forecasts for 2026, 2027 and 2028 were sealed before any official figure existed. The files and their SHA-256
   fingerprints are in `results/forecasts/`.
 
+## Live dashboard
+
+https://yieldformer-de.streamlit.app (free hosting: after a quiet period it sleeps and takes about half a minute to
+wake up).
+
 ## Model and data downloads
 
 - Model checkpoints (the three networks of YieldFormer-DE and version v20):
