@@ -199,9 +199,19 @@ def load_csv(name: str) -> pd.DataFrame:
 
 @st.cache_resource(show_spinner=False)
 def load_geo():
-    """Simplified district polygons (rounded coordinates) and the Germany outline."""
+    """Simplified district polygons (rounded coordinates) and the Germany outline.
+
+    Built from the GISCO shapefile when it is there; otherwise (a fresh clone, the hosted dashboard) from the
+    simplified copy kept in dashboard/static/, so the map works without downloading the raw boundaries."""
+    from shapely.geometry import mapping, shape
+    from shapely.ops import unary_union
+    if not SHAPEFILE.exists() and GEO_FILE.exists():
+        gj = json.loads(GEO_FILE.read_text())
+        outline = unary_union([shape(f["geometry"]).buffer(0) for f in gj["features"]]).simplify(0.01)
+        lines = [(list(np.round(p.exterior.coords.xy[0], 3)), list(np.round(p.exterior.coords.xy[1], 3)))
+                 for p in getattr(outline, "geoms", [outline])]
+        return gj, lines
     import geopandas as gpd
-    from shapely.geometry import mapping
     g = gpd.read_file(SHAPEFILE)
     g = g[g.CNTR_CODE == "DE"][["NUTS_ID", "geometry"]].copy()
     g["geometry"] = g.geometry.simplify(0.004, preserve_topology=True)
@@ -1182,7 +1192,8 @@ if view == "Map":
             f"the season, months before Destatis publishes it.\n"
             f"- **Data:** official district yields (Destatis, table 41241-01-03-4); daily weather (DWD stations, "
             f"ERA5-Land soil water); MODIS satellite vegetation indices over arable land; DWD crop development "
-            f"stages; SoilGrids soil; census crop areas. Seasons 2000–{LAST_YEAR}.\n"
+            f"stages; SoilGrids soil; census crop areas. Seasons 2000–{LAST_YEAR}. District boundaries: "
+            f"© EuroGeographics for the administrative boundaries (GISCO), non-commercial use.\n"
             f"- **Model:** {MODEL}, the average of three transformer networks (Temporal Fusion Transformer, "
             f"iTransformer, PatchTST) plus a district error memory.\n"
             f"- **Test:** each season {FIRST_YEAR}–{LAST_YEAR} forecast by a model trained only on earlier seasons "
