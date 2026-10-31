@@ -1,0 +1,31 @@
+# Every commit in this repository is authored by roshangupta00750 and carries no co-author lines.
+# The only exception is the team project's initial commit by Manisha Samal.
+name: Authorship
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check author and co-author lines of every commit
+        run: |
+          allowed="31376345+roshangupta00750@users.noreply.github.com roshangupta00750@gmail.com"
+          exempt="eaafda08bac25b0805c723583bd6f4e2ae6b1d88"
+          bad=0
+          for c in $(git rev-list HEAD); do
+            [ "$c" = "$exempt" ] && continue
+            email=$(git log -1 --format=%ae "$c")
+            if ! echo " $allowed " | grep -q " $email "; then
+              echo "::error::$c is authored by $email, not roshangupta00750"; bad=1
+            fi
+            if git log -1 --format=%B "$c" | grep -qiE '^co-authored-by:|generated with'; then
+              echo "::error::$c has a co-author or generated-with line"; bad=1
+            fi
+          done
+          exit $bad
