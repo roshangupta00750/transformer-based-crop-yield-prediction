@@ -14,15 +14,17 @@ DATA = ROOT / "results" / "dashboard" / "model_rows.parquet"
 st_testing = pytest.importorskip("streamlit.testing.v1")
 pytestmark = pytest.mark.skipif(not DATA.exists(), reason="run scripts/63_dashboard_data.py first")
 
-CARDS = ["Accuracy", "Better in", "Within ±10%", "Poor years detected", "2026 forecast"]
+CARDS = ["Accuracy", "Better in", "Within ±10%", "Poor crop-years", "2026 forecast"]
 VIEWS = ["Map", "District look-up", "Table & download", "Forecasts", "Compare"]
 REQUIRED = {
-    "Map": ["Colour the map by", "Click a district to open its card"],
+    "Map": ["Colour the map by", "Click a district to open its card", "% above or below the district normal",
+            "of the backtest forecasts in each season", "Gap to the 5-year average", "Data & method"],
     "District look-up": ["Year by year", "All crops in this district", "Download this district"],
-    "Table & download": ["Estimates in the selection", "Estimates in this selection (CSV)",
+    "Table & download": ["Backtest forecasts in the selection", "Level", "District table as shown (CSV)",
+                         "Backtest forecasts in this selection (CSV)",
                          "2026 forecasts in this selection (CSV)", "Data dictionary (CSV)"],
-    "Forecasts": ["Forecast shown", "District forecasts", "preliminary official national yields",
-                  "Also sealed: 2027 and 2028"],
+    "Forecasts": ["Forecast shown", "District forecasts for", "preliminary official national yields",
+                  "Sealed forecast files", "Revealed: sealed", "Download this sealed file, unchanged"],
     "Compare": ["Accuracy on the same"],
 }
 
@@ -98,7 +100,7 @@ def test_map_shows_past_harvests(crop, layer):
     at.selectbox(key="map_year").set_value(2018).run()
     at.radio(key="map_layer").set_value(layer).run()
     assert not at.exception, [e.value for e in at.exception]
-    assert "2018 harvest" in at.selectbox(key="map_year").options      # AppTest lists the formatted labels
+    assert "2018 (harvest) · backtest forecast" in at.selectbox(key="map_year").options   # formatted labels
 
 
 def test_region_filter_narrows_states_and_selection():
@@ -181,3 +183,45 @@ def test_numbers_are_computed_not_typed():
     src = APP.read_text()
     for literal in ('"5 of 8"', '"6 of 18"', "7.3% vs 8.2%"):
         assert literal not in src
+
+
+@pytest.mark.parametrize("level", ["District", "State", "Region", "Germany"])
+def test_table_levels_put_official_and_estimate_side_by_side(level):
+    """User 2026-10-31: forecast vs official at district, state, region and national level in one table."""
+    at = st_testing.AppTest.from_file(str(APP), default_timeout=180)
+    at.run()
+    at.radio(key="view").set_value("Table & download").run()
+    at.radio(key="tbl_level").set_value(level).run()
+    assert not at.exception, [e.value for e in at.exception]
+    text = _text(at)
+    assert f"official vs forecast by {level.lower()}" in text
+    assert f"{level} table as shown (CSV)" in text
+
+
+def test_sealed_files_are_recomputed_and_unchanged():
+    at = st_testing.AppTest.from_file(str(APP), default_timeout=180)
+    at.run()
+    at.radio(key="view").set_value("Forecasts").run()
+    text = _text(at)
+    assert "✓ unchanged" in text and "✗ changed" not in text and "file missing" not in text
+
+
+@pytest.mark.parametrize("season", [0, 1, 2])
+def test_every_sealed_season_can_be_viewed(season):
+    at = st_testing.AppTest.from_file(str(APP), default_timeout=180)
+    at.run()
+    at.radio(key="view").set_value("Forecasts").run()
+    r = at.radio(key="fc_year")
+    r.set_value(int(r.options[season][:4])).run()          # options are labels; the value is the year
+    assert not at.exception, [e.value for e in at.exception]
+    assert "District forecasts for" in _text(at)
+
+
+def test_backtest_and_sealed_forecasts_are_named_apart(app):
+    """User 2026-10-31: 2010-2025 are forecasts too (backtests), 2026 is the sealed one; never called 'estimates'."""
+    text = _text(app)
+    assert "backtest forecasts 2010–2025" in text and "sealed" in text
+    assert "is not scored yet" in text
+    assert "Estimate (dt/ha)" not in text
+    assert "90% range" in text and "not a hit rate" in text           # reviewers 2026-10-31: uncertainty + definition
+    assert "Long-term average" not in text                             # one name on screen: "District normal"

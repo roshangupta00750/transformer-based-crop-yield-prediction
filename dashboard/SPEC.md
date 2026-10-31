@@ -26,17 +26,46 @@ the same day (designer 6/10, end user 7/10) led to the changes listed under "Rul
   and Crop area in grey; zooms to a chosen state; formatted hovers; horizontal colour bar; click → district card
   beside the map; click a year in the side chart → that year) · **District look-up** (picker; district card: forecast
   + 80% range, normal, accuracy, crop area, official vs estimate + 2026 forecast, all 16 years on one page, all crops in
-  the district, CSV with NUTS code and model) · **Table & download** (paged table, CSVs of the selection with NUTS code,
-  model, issue date and the selection in the file name; German Excel option; data dictionary) · **Forecasts** (sealed
-  line with the filtered count; forecast vs normal per crop, or the district distribution for one crop; paged district
-  table; preliminary national check as a table with both aggregations, wording computed; SHA-256 only in the expander)
+  the district, CSV with NUTS code and model) · **Table & download** (user, 2026-10-31: official vs estimate side by side at every level — "Level" switch
+  District / State / Region / Germany; above district level the district yields of the selection are averaged with
+  census crop area as weight, with the number of districts; columns official, estimate, error, comparison, its error,
+  gain in pp; search box; one-line note that an estimate is a backtest forecast for a season the model never saw;
+  paged table; CSV of the table as shown at the chosen level, CSVs of the selection with NUTS code, model, issue date
+  and the selection in the file name; German Excel option; data dictionary) · **Forecasts** (user, 2026-10-31: sealed
+  line with the filtered count; forecast vs normal per crop, or the district distribution for one crop; beside it
+  "Sealed forecast files": every file of `results/forecasts/FROZEN.sha256` with season, issue date, recorded
+  fingerprint and a check recomputed on every run (✓ unchanged / ✗ changed / file missing), how sealing works in
+  one caption, download of each sealed file unchanged and of FROZEN.sha256; full-width "District forecasts for <year>"
+  with a Season switch over every sealed year (later years are district normals, said in a caption), search box and,
+  once published, the official yield and error; "Revealed: sealed <year> forecast vs official yield" — says "Not
+  revealed yet" until `results/dashboard/official_sealed_years.csv` (written by scripts/63 from
+  data/interim/yield.parquet) has rows for that year, then turns on by itself with accuracy vs the normal-year
+  forecast, districts closer, within ±10 % and a per-crop table; preliminary national check as a table with both
+  aggregations, wording computed)
   · **Compare** ("Benchmark": simple averages and members on the same rows; published models with case results,
   "higher/lower is better" per measure, all counts computed from `papers.csv`; JRC MARS 2025 headed "not
   like-for-like", MARS grey diamonds; poor years with the three rules, false alarms and the −10 % / −5 % lines).
 - **Colour and spotlight** (user, 2026-10-16: "too white"; "spotlight" so the audience focuses on one part): header in a blue band; every table and chart sits in its own lightly tinted panel (`panel(name, tint)` → `st.container(key="pnl-<tint>-<name>")`; tints sky, teal, sand, violet, green, slate are decoration only, data colours keep their meaning); summary cards carry a coloured top stripe. Spotlight (sidebar toggle, on by default): a click on a panel or summary card lights it with a blue ring and dims everything else in the main area; a click on empty space or Esc clears it; the sidebar is never dimmed.
 - **Seasons and regions** (user, 2026-10-16; placed after three reviews: designer, jury presenter, statistics): Region filter (North, East, South, West = groups of federal states, ⓘ lists them) between Years and State; it narrows State and District, zooms the map, and the map keeps the national colour scale. Map view: "Which region does better?" under the map — both answers (user, 2026-10-16): a headline "Most accurate: X · Gains most over the comparison: Y", accuracy as dots and gain as zero-based bars side by side, regions in fixed N/E/S/W order (click a region = filter); the same headline above the region table in Compare, "Gain by crop" and "Gain by season" on the right. All per-group charts are zero-based gain bars in fixed order (crops, N/E/S/W, seasons in time order), blue/red, with a thin 90% range from resampling whole seasons; range line and label are separate layers so bar clicks work. Compare › Seasons & regions: no "winner" claim — within 0.5 pp of the season's best, largest shortfall, switch-to-last-season's-winner check, member-vs-ensemble strip (T/i/P, XGBoost grey), season table with "(tie)" for leads under 0.5 pp, region table with accuracy, gain, 90% range, seasons better, gain without 2018, gain with every crop equal, TFT minus ensemble. Forecasts per crop: area-weighted bar (as the card) with the district spread; MARS: signed errors with an ours↔MARS connector.
 - **Computing cost** (user, 2026-10-16; Compare › Computing cost): GPU hours of the final model, size of the three networks, GPU types, an energy upper bound (GPU hours × maximum board power), a per-network table (parameters, file size, runs, GPU per run, median training and fine-tuning time, runs stopped by the 120-min limit, GPU hours; XGBoost as a labelled reference) and GPU hours per network (training + fine-tuning). Data: `results/dashboard/compute_jobs.csv` and `compute_models.csv`, written by `scripts/79_compute_cost.py` from the SLURM job logs and checkpoints, copied locally.
-- **Rules**: "estimate" = 2010–2025 backtest, "forecast" = sealed 2026; blue = our model / above normal / better,
+- **Season lines and method box (user, 2026-10-31)**, at the foot of the Map view, all following the filters:
+  "Forecast vs official, season by season" (lines in % vs the district normal so crops can be pooled: official black,
+  backtest forecast blue, comparison grey, sealed forecast as a diamond with its 80% range; click a season = filter),
+  "Accuracy by season" (model, comparison and district normal as lines), "Accuracy by forecast date" (30 June and
+  31 July from the in-season runs v20, harvest from the final model, 5-year average as a line; only the Crop filter
+  applies; the gaps are computed into the caption) and a "Data & method" box (question, data sources, model, test,
+  links to code, model and data).
+- **Wording after two blind reviews (user, 2026-10-31)**: 2010–2025 are "backtest forecasts" (tables: season as
+  "2025 (harvest)", value column "Forecast"), 2026 onwards "sealed forecast"; never "estimate" on screen. A reading line
+  under the cards says the first four cards are a plain mean over the backtest forecasts, that the design was chosen
+  while these results were visible (changes kept only by the written rule on the decision window), that the 2026 card
+  is area-weighted and that the sealed forecast is not scored yet. Accuracy card: "not a hit rate" in its tooltip and
+  the 90% range of the gain from resampling whole seasons. One name for the long-term reference: "District normal"
+  (data column "Long-term average" unchanged). "Poor crop-years" card. Sealed files labelled by role (final model,
+  pre-registered test v1, earlier main model, district normal); the Revealed panel scores both the pre-registered
+  27 Sep file and the final model's file against the district normal. The preliminary national check says the
+  figures were public (August 2026) before every 2026 file was sealed.
+- **Rules**: "backtest forecast" = 2010–2025, "sealed forecast" = 2026 onwards; blue = our model / above normal / better,
   red = below / worse, grey = comparison or neutral quantity, black = official; no heatmaps; tables are plain HTML
   (no internal scrolling, no header-click sorting, paging instead); crops always in the fixed order, never ranked; one
   decimal, "+"/"−" signs, "–" for missing; every count computed from the data (none typed in); no training controls

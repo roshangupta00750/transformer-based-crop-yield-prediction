@@ -2,7 +2,8 @@
 
 Filter bar + five cards + one view at a time (Map | District look-up | Table & download | Forecasts | Compare).
 Every number is read from results/dashboard/ (written by scripts/63_dashboard_data.py); nothing is typed in by hand.
-Vocabulary: "estimate" = rolling backtest 2010-2025 (the model never saw that year); "forecast" = sealed 2026 file.
+Vocabulary (user, 2026-10-31): "backtest forecast" = 2010-2025, each season forecast by a model trained only on earlier
+seasons; "sealed forecast" = 2026 onwards, saved before the season's official yields existed. In code `E`/"estimate".
 Run: ./dashboard/run.sh (entry point dashboard/main.py, localhost only). Backup of the earlier app: run_old.sh.
 """
 from __future__ import annotations
@@ -221,8 +222,27 @@ def load_geo():
     return gj, lines
 
 
+@st.cache_data(show_spinner=False)
+def sealed_files(stamp: float) -> pd.DataFrame:
+    """Every file listed in FROZEN.sha256, its fingerprint recomputed now. `stamp` (newest mtime) refreshes the cache."""
+    import hashlib
+    rows = []
+    for line in (SEALED / "FROZEN.sha256").read_text().splitlines():
+        if not line.strip():
+            continue
+        want, name = line.split()
+        f = SEALED / name
+        got = hashlib.sha256(f.read_bytes()).hexdigest() if f.exists() else None
+        yr, issued = re.search(r"forecast_(\d{4})", name), re.search(r"issued_(\d{4}-\d{2}-\d{2})", name)
+        rows.append({"file": name, "year": int(yr.group(1)) if yr else None, "issued": issued.group(1) if issued else "",
+                     "recorded": want, "check": "missing" if got is None else ("ok" if got == want else "changed")})
+    return pd.DataFrame(rows).sort_values(["year", "issued"], ignore_index=True)
+
+
+SEALED = ROOT / "results" / "forecasts"
 E_ALL = load_estimates().assign(region=lambda x: x.state.map(REGION_OF))
 F_ALL = load_csv("forecast_yieldformer.csv")
+OFFICIAL = load_csv("official_sealed_years.csv")   # official yields of sealed years; empty until Destatis publishes
 AREA = load_csv("crop_area.csv")
 NAME_OF = F_ALL.dropna(subset=["district"]).drop_duplicates("landkreis").set_index("landkreis")["district"].to_dict()
 NAME_OF.update(E_ALL.drop_duplicates("landkreis").set_index("landkreis")["district"].to_dict())
@@ -237,6 +257,7 @@ EARLY_END = FIRST_YEAR + 5   # the report's two test periods: the first six seas
 DROUGHT_YEAR = 2018          # the drought season, left out once to check that a region's gain is not one year
 F26_ALL = F_ALL[(F_ALL.year == FC_YEAR) & (F_ALL.model == MODEL)]
 META = F26_ALL.iloc[0] if len(F26_ALL) else None
+META_FILE = META.file if META is not None else ""
 
 
 def cname(c: str) -> str:
@@ -247,7 +268,15 @@ def sname(s) -> str:
     return STATE_DE.get(s, s) if isinstance(s, str) else ""
 
 
+SHOW = {"Long-term average": "District normal"}   # one name on screen (reviewers, 2026-10-31); data column unchanged
+
+
+def dn(r: str) -> str:
+    return SHOW.get(r, r)
+
+
 def rshort(r: str) -> str:
+    r = dn(r)
     return r if "XGBoost" in r else r.lower()
 
 
@@ -272,6 +301,19 @@ def acc_by(d: pd.DataFrame, col: str, by: str = "landkreis") -> pd.Series:
     """Accuracy per group without a Python loop (same definition as acc)."""
     ape = (100 * (d[col] - d.actual).abs() / d.actual).where(d.actual > 0)
     return 100 - ape.groupby(d[by]).mean()
+
+
+def gain_range(d: pd.DataFrame, m: str, r: str, n: int = 10000) -> tuple:
+    """90% range of (accuracy of m - accuracy of r) with whole seasons resampled (districts share a season's weather)."""
+    d = d.dropna(subset=["actual", m, r])
+    d = d[d.actual > 0]
+    y = (d.assign(em=(d[m] - d.actual).abs() / d.actual * 100, er=(d[r] - d.actual).abs() / d.actual * 100)
+         .groupby("year").agg(em=("em", "sum"), er=("er", "sum"), n=("em", "size")))
+    if len(y) < 3:
+        return float("nan"), float("nan")
+    idx = np.random.default_rng(0).integers(0, len(y), size=(n, len(y)))
+    g = (y.er.to_numpy()[idx].sum(1) - y.em.to_numpy()[idx].sum(1)) / y.n.to_numpy()[idx].sum(1)
+    return tuple(np.percentile(g, [5, 95]))
 
 
 def f1(x, d=1) -> str:
@@ -341,6 +383,32 @@ def paged(df: pd.DataFrame, key: str, numeric: tuple = (), per: int = 15):
     d.button("Next ▶", key=f"{key}_next", on_click=_step, args=(key, 1, pages), disabled=p >= pages, width="stretch")
 
 
+LEVELS = ["District", "State", "Region", "Germany"]
+
+
+def by_level(T: pd.DataFrame, cols: list, level: str) -> pd.DataFrame:
+    """Rows per year, crop and area unit; yields averaged with each district's census crop area as weight (as the
+    official state and national yields are), plain mean where no area is known. District level returns T as is."""
+    if level == "District":
+        return T.assign(unit=T.district, n=1)
+    unit = {"State": T.state.map(sname), "Region": T.region, "Germany": pd.Series("Germany", index=T.index)}[level]
+    d = T.assign(unit=unit).merge(AREA[["landkreis", "crop", "area_ha"]], on=["landkreis", "crop"], how="left")
+    d["w"] = d.area_ha.fillna(0.0)
+    keys = ["year", "crop", "unit"]
+    g = d.groupby(keys)
+    out = g.size().rename("n").to_frame()
+    wsum = g.w.sum()
+    for c in cols:
+        ok = d[c].notna()
+        wx = (d[c] * d.w).where(ok).groupby([d[k] for k in keys]).sum()
+        out[c] = (wx / wsum.where(wsum > 0)).fillna(g[c].mean())
+    return out.reset_index()
+
+
+def search_box(key: str, label: str = "Search district or state") -> str:
+    return st.text_input(label, key=key, placeholder="type part of a name", label_visibility="collapsed").strip().lower()
+
+
 def layout(fig, h=340, **kw):
     fig.update_layout(height=h, margin=kw.pop("margin", dict(l=8, r=8, t=34, b=8)), plot_bgcolor="rgba(0,0,0,0)",
                       paper_bgcolor="rgba(0,0,0,0)",
@@ -407,7 +475,7 @@ def _set_from(target: str, key: str):
 # --------------------------------------------------------------------------- header + filter panel (left sidebar)
 sealed = f"2026 forecast sealed {dfmt(META.issued)} · data to {dfmt(META.data_end)}" if META is not None else ""
 st.markdown(f"<div class='band'><span class='title'>YieldFormer-DE · district crop yields in Germany</span>"
-            f"<span class='chip'>estimates 2010–2025: each year from a model that never saw it</span>"
+            f"<span class='chip'>backtest forecasts 2010–2025: each season from a model that never saw it</span>"
             f"<span class='chip'>{html.escape(sealed)}</span>"
             f"<div class='limits'>Limits: uses weather up to harvest, so it comes before the official statistics, not "
             f"before the season · at 30 June no better than the 5-year average · large single-district losses are "
@@ -418,7 +486,7 @@ sb.markdown("<div class='ftitle'>Filters</div><div class='sub' style='font-size:
             "view</div>", unsafe_allow_html=True)
 crop = sb.selectbox("Crop", ["All crops"] + CROPS, format_func=lambda c: c if c == "All crops" else cname(c),
                     key="f_crop")
-years = sb.select_slider("Years (estimates)", options=list(range(FIRST_YEAR, LAST_YEAR + 1)), value=DEFAULTS["f_years"],
+years = sb.select_slider("Years (backtest forecasts)", options=list(range(FIRST_YEAR, LAST_YEAR + 1)), value=DEFAULTS["f_years"],
                          key="f_years")
 region = sb.selectbox("Region", ["All regions"] + REGIONS, key="f_region", help=REGION_HELP)
 states = sorted((s_ for s_ in E_ALL.state.dropna().unique() if region == "All regions" or REGION_OF.get(s_) == region),
@@ -433,14 +501,16 @@ dnames = ["All districts"] + sorted(pool.district.dropna().unique())
 if ss.get("f_district") not in dnames:
     ss["f_district"] = "All districts"
 district = sb.selectbox("District (type to search)", dnames, key="f_district")
-ref = sb.selectbox("Compare with", COMPARE, key="f_ref",
-                   help="5-year average: the district's mean yield of the five years before. Long-term average: "
-                        "the district normal (mean of all earlier years, plus a trend if one is clear). "
+ref = sb.selectbox("Compare with", COMPARE, key="f_ref", format_func=dn,
+                   help="5-year average: the district's mean yield of the five years before. District normal: the mean of "
+                        "all earlier years, plus a trend if one is clear (the same normal is used everywhere on this page). "
                         "XGBoost + memory: a tree model on the same inputs, shown as a reference only.")
-model = sb.selectbox("Model (estimates)", MODELS, format_func=MLABEL.get, key="f_model",
+model = sb.selectbox("Model (backtest forecasts)", MODELS, format_func=MLABEL.get, key="f_model",
                      help=f"{MODEL} is the final model: the average of three transformer networks (TFT, iTransformer, "
                           "PatchTST) plus a district error memory. The members are each network with the memory. "
-                          "The 2026 forecast is always the final model.")
+                          "The 2026 forecast is always the final model. District error memory: adds back each "
+                          "district's average error over the earlier seasons. vN = version number of the project's "
+                          "written plans (v1 to v20); each version was planned in writing before it was run.")
 sb.button("Reset all filters", on_click=_reset, width="stretch", help="All filters back to their defaults")
 sb.divider()
 spot_on = sb.toggle("Spotlight", value=True, key="spot_on",
@@ -450,7 +520,7 @@ sb.caption("Spotlight: click a panel to focus on it; Esc or a click on empty spa
 with sb:
     components.html(SPOTLIGHT_JS.replace("__ON__", "true" if spot_on else "false"), height=0)
 
-RS = {"5-year average": "5-yr avg", "Long-term average": "Long-term avg",
+RS = {"5-year average": "5-yr avg", "Long-term average": "Normal",
       "XGBoost + memory (reference)": "XGBoost ref."}.get(ref, ref)   # short form for table headers
 fp = (crop, tuple(years), region, state, district, ref, model)                 # back to page 1 when the filters change
 if ss.get("_fp") != fp:
@@ -511,24 +581,30 @@ m_mod, m_ref = mape(E[model], E.actual), mape(E[ref], E.actual)
 gain = m_ref - m_mod
 yr = acc_by(E, model, "year") - acc_by(E, ref, "year")
 k = st.columns(5)
-RN = ref.replace(" (reference)", "")                                     # comparison name on the cards
-card(k[0], "Accuracy", f"{100 - m_mod:.1f}%", f"{RN} {100 - m_ref:.1f}%", hero=True,
-     chip=(f"{fs(gain)} pp", gain >= 0), accent=ACCENT["accuracy"],
-     help_="100 minus the mean % error of the district estimates. pp = percentage points.")
+RN = dn(ref).replace(" (reference)", "")                                     # comparison name on the cards
+lo_, hi_ = gain_range(E, model, ref)
+card(k[0], "Accuracy", f"{100 - m_mod:.1f}%",
+     [f"{RN} {100 - m_ref:.1f}%", f"90% range {fs(lo_)} to {fs(hi_)} pp" if lo_ == lo_ else "range: too few seasons"],
+     hero=True, chip=(f"{fs(gain)} pp", gain >= 0), accent=ACCENT["accuracy"],
+     help_="Accuracy = 100 minus the mean absolute % error of the district backtest forecasts (not a hit rate). "
+           "pp = percentage points. 90% range of the gain: whole seasons resampled 10,000 times, because districts "
+           "in one season share the weather.")
 card(k[1], "Better in", f"{int((yr > 0).sum())} of {len(yr)}", f"{'season' if len(yr) == 1 else 'seasons'} vs {RN}",
      accent=ACCENT["better"],
-     help_="Seasons (harvest years) in which the model was more accurate than the comparison.")
+     help_="Seasons (harvest years) in which the backtest forecast was more accurate than the comparison.")
 w_mod = 100 * np.mean(np.abs(E[model] / E.actual - 1) <= 0.10)
 w_ref = 100 * np.mean(np.abs(E[ref] / E.actual - 1) <= 0.10)
 card(k[2], "Within ±10%", f"{w_mod:.0f}%", f"{RN} {w_ref:.0f}%", accent=ACCENT["within"],
-     help_="Share of estimates within 10% of the official yield.")
+     help_="Share of backtest forecasts within 10% of the official yield.")
 real, est = poor_years(E, model)
 poor, sig = real <= -10, est <= -5
 n_poor, hit, false = int(poor.sum()), int((poor & sig).sum()), int((~poor & sig).sum())
 near = int((~poor & sig & (real <= -5)).sum())
-card(k[3], "Poor years detected", f"{hit} of {n_poor}" if n_poor else "–", plural(false, "false alarm"),
+card(k[3], "Poor crop-years", f"{hit} of {n_poor}" if n_poor else "–", f"detected · {plural(false, 'false alarm')}",
      accent=ACCENT["poor"],
-     help_="Poor: yield ≥10% below normal. Detected: estimate ≥5% below normal, made at harvest."
+     help_="Counted per crop-year (one crop in one season, averaged over the districts in the selection). Poor: "
+           "yield ≥10% below normal. Detected: backtest forecast ≥5% below normal; the forecast uses weather up "
+           "to harvest."
            + (f" {near} of the false alarms were years 5–10% below normal." if near else ""))
 if F26.empty:
     card(k[4], "2026 forecast", "–", "none for this selection", accent=ACCENT["forecast"])
@@ -543,8 +619,16 @@ else:
          help_=f"All crops, weighted by crop area. {int((nat.y_pred > nat.y_hist).sum())} of {len(nat)} crops above normal.")
 st.markdown(f"<div class='sub' style='margin:6px 0 2px 0'>Selection: "
             f"{cname(crop) if crop != 'All crops' else 'all crops'} · {html.escape(scope)} · {yr_txt} · "
-            f"{html.escape(MLABEL[model])} vs {html.escape(ref)} · {plural(E.landkreis.nunique(), 'district')} · "
-            f"{plural(len(E), 'estimate')}</div>", unsafe_allow_html=True)
+            f"{html.escape(MLABEL[model])} vs {html.escape(dn(ref))} · {plural(E.landkreis.nunique(), 'district')} · "
+            f"{plural(len(E), 'backtest forecast')}</div>"
+            f"<div class='sub' style='margin:0 0 2px 0'>How to read the cards: the first four are scored on the "
+            f"backtest forecasts {FIRST_YEAR}–{LAST_YEAR}, a plain mean over every district-crop-year with an official "
+            f"yield (not every crop is grown in every district). Each season was forecast by a model trained only on "
+            f"earlier seasons, but the design (inputs, networks, settings; versions v1–v20) was chosen while these "
+            f"results were visible; a change was kept only if it passed a rule written in advance and tested on "
+            f"{FIRST_YEAR}–{EARLY_END}. The {FC_YEAR} card is weighted by crop area. The sealed {FC_YEAR} forecast "
+            f"is not scored yet: Destatis has not published its district yields.</div>",
+            unsafe_allow_html=True)
 
 VIEWS = ["Map", "District look-up", "Table & download", "Forecasts", "Compare"]
 view = st.radio("View", VIEWS, horizontal=True, key="view", label_visibility="collapsed")
@@ -611,10 +695,10 @@ def selection_trend(d: pd.DataFrame, f26: pd.DataFrame, title: str, h=320):
     fig.add_trace(go.Scatter(x=g.index, y=g.actual, name="Official yield", mode="lines+markers",
                              line=dict(color=INK, width=2), marker=dict(size=7),
                              hovertemplate="%{x}: %{y:.1f} dt/ha<extra>official</extra>"))
-    fig.add_trace(go.Scatter(x=g.index, y=g[model], name="Estimate", mode="lines+markers",
+    fig.add_trace(go.Scatter(x=g.index, y=g[model], name="Forecast (backtest)", mode="lines+markers",
                              line=dict(color=BLUE, width=2), marker=dict(size=7),
-                             hovertemplate="%{x}: %{y:.1f} dt/ha<extra>estimate</extra>"))
-    fig.add_trace(go.Scatter(x=g.index, y=g[ref], name=ref, mode="lines", line=dict(color=GREY, width=2, dash="dot"),
+                             hovertemplate="%{x}: %{y:.1f} dt/ha<extra>backtest forecast</extra>"))
+    fig.add_trace(go.Scatter(x=g.index, y=g[ref], name=dn(ref), mode="lines", line=dict(color=GREY, width=2, dash="dot"),
                              hovertemplate="%{x}: %{y:.1f} dt/ha<extra>" + ref + "</extra>"))
     if not f26.empty:
         y0 = f26.y_pred.mean()
@@ -626,6 +710,83 @@ def selection_trend(d: pd.DataFrame, f26: pd.DataFrame, title: str, h=320):
     layout(fig, h, title=dict(text=title, font=dict(size=14), x=0), yaxis_title="dt/ha",
            xaxis=dict(dtick=2, tickformat="d"))
     return fig
+
+
+def swing_trend(d: pd.DataFrame, f26: pd.DataFrame, title: str, h=330):
+    """Season by season, in % vs the district normal so that crops can be pooled: official, backtest forecast,
+    comparison (plain mean over the district-crop-years) and the sealed forecast with its 80% range."""
+    x = d[d["Long-term average"] > 0]
+    pct = lambda c: 100 * (x[c] / x["Long-term average"] - 1)          # noqa: E731
+    g = pd.DataFrame({"off": pct("actual"), "fc": pct(model), "ref": pct(ref), "year": x.year}).groupby("year").mean()
+    fig = go.Figure()
+    fig.add_hline(y=0, line_color=LGREY, line_width=1)
+    fig.add_trace(go.Scatter(x=g.index, y=g.off, name="Official yield", mode="lines+markers",
+                             line=dict(color=INK, width=2), marker=dict(size=7),
+                             hovertemplate="%{x}: %{y:+.1f}% vs normal<extra>official</extra>"))
+    fig.add_trace(go.Scatter(x=g.index, y=g.fc, name="Forecast (backtest)", mode="lines+markers",
+                             line=dict(color=BLUE, width=2), marker=dict(size=7),
+                             hovertemplate="%{x}: %{y:+.1f}% vs normal<extra>backtest forecast</extra>"))
+    if ref != "Long-term average":
+        fig.add_trace(go.Scatter(x=g.index, y=g.ref, name=dn(ref), mode="lines",
+                                 line=dict(color=GREY, width=2, dash="dot"),
+                                 hovertemplate="%{x}: %{y:+.1f}% vs normal<extra>" + dn(ref) + "</extra>"))
+    if not f26.empty:
+        v = f26[f26.y_hist > 0]
+        y0 = float((100 * (v.y_pred / v.y_hist - 1)).mean())
+        lo, hi = float((100 * (v.lo80 / v.y_hist - 1)).mean()), float((100 * (v.hi80 / v.y_hist - 1)).mean())
+        fig.add_trace(go.Scatter(x=[FC_YEAR], y=[y0], name=f"{FC_YEAR} sealed forecast", mode="markers",
+                                 marker=dict(color=BLUE, size=12, symbol="diamond"),
+                                 error_y=dict(type="data", symmetric=False, color=LIGHT, thickness=3,
+                                              array=[hi - y0], arrayminus=[y0 - lo]),
+                                 hovertemplate=f"{FC_YEAR} sealed forecast: %{{y:+.1f}}% vs normal (80% range "
+                                               f"{lo:+.1f} to {hi:+.1f}%)<extra></extra>"))
+    layout(fig, h, title=dict(text=title, font=dict(size=14), x=0), yaxis=dict(ticksuffix="%"),
+           xaxis=dict(dtick=2, tickformat="d"))
+    return fig
+
+
+def accuracy_lines(d: pd.DataFrame, title: str, h=330):
+    """Accuracy per season: the model, the chosen comparison and (if it is not the comparison) the district normal."""
+    fig = go.Figure()
+    lines = [(model, MLABEL[model].split(" · ")[0], BLUE, "solid"), (ref, dn(ref), GREY, "dot")]
+    if ref != "Long-term average":
+        lines.append(("Long-term average", dn("Long-term average"), LGREY, "dash"))
+    for col, nm, colr, dash in lines:
+        a = acc_by(d, col, "year")
+        fig.add_trace(go.Scatter(x=a.index, y=a, name=nm, mode="lines+markers" if col == model else "lines",
+                                 line=dict(color=colr, width=2.5 if col == model else 2, dash=dash),
+                                 marker=dict(size=7),
+                                 hovertemplate="%{x}: %{y:.1f}%<extra>" + html.escape(nm) + "</extra>"))
+    layout(fig, h, title=dict(text=title, font=dict(size=14), x=0), yaxis=dict(ticksuffix="%"),
+           xaxis=dict(dtick=2, tickformat="d"))
+    return fig
+
+
+def date_chart(title: str, h=300):
+    """Accuracy by forecast date: in-season runs with data cut 30 June / 31 July, then the harvest-time model."""
+    one = crop != "All crops"
+    T = load_csv("inseason_by_crop.csv" if one else "inseason.csv")
+    if T.empty:
+        return None, []
+    T = T[T.crop == crop] if one else T[T.window.astype(str).str.startswith("all")]   # all crops: whole period
+    if T.empty:
+        return None, []
+    cuts = {"06-30": "30 June", "07-31": "31 July"}
+    xs = [cuts.get(c, c) for c in T.cut] + ["Harvest"]
+    ys = list(T.acc_XH) + [float(T.acc_XE18.iloc[0])]
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=xs, y=ys, name="Our forecast", mode="lines+markers+text",
+                             line=dict(color=BLUE, width=2.5), marker=dict(size=9), text=[f"{y:.1f}%" for y in ys],
+                             textposition="top center", hovertemplate="%{x}: %{y:.1f}%<extra></extra>"))
+    fig.add_trace(go.Scatter(x=xs, y=[float(T.acc_b5.iloc[0])] * len(xs), name="5-year average", mode="lines",
+                             line=dict(color=GREY, width=2, dash="dot"),
+                             hovertemplate="5-year average: %{y:.1f}%<extra></extra>"))
+    b5 = float(T.acc_b5.iloc[0])
+    lo, hi = min(ys + [b5]), max(ys + [b5])
+    layout(fig, h, title=dict(text=title, font=dict(size=14), x=0),
+           yaxis=dict(ticksuffix="%", range=[lo - 1.0, hi + 0.8]))
+    fig.update_traces(cliponaxis=False)
+    return fig, [y - b5 for y in ys]                     # and the gap to the 5-year average per date
 
 
 def gains(d: pd.DataFrame, by: str, boot: int = 500) -> pd.DataFrame:
@@ -783,6 +944,8 @@ def district_card(name: str, compact: bool = False):
                    args=("f_crop", key), label_visibility="collapsed",
                    help="Choosing a crop here sets the Crop filter for the whole dashboard.")
         d, f = D[D.crop == c], FD[FD.crop == c]
+        st.markdown(f"<div class='sub'>The four cards below show <b>{cname(c)}</b>; the cards at the top of the page "
+                    "show the whole selection.</div>", unsafe_allow_html=True)
         a = AREA[(AREA.landkreis == code) & (AREA.crop == c)]
         t = st.columns(2) + st.columns(2) if compact else st.columns(4)
         if len(f):
@@ -794,7 +957,7 @@ def district_card(name: str, compact: bool = False):
             card(t[1], "Normal yield", "–", "", small=True)
         if len(d):
             card(t[2], f"Accuracy {yr_txt}", f"{acc(d[model], d.actual):.1f}%",
-                 f"{ref}: {acc(d[ref], d.actual):.1f}%", small=True)
+                 f"{dn(ref)}: {acc(d[ref], d.actual):.1f}%", small=True)
         else:
             card(t[2], "Accuracy", "–", "no official yields in these years", small=True)
         if len(a):
@@ -804,7 +967,7 @@ def district_card(name: str, compact: bool = False):
         else:
             card(t[3], "Crop area (census)", "–", "", small=True)
         if len(d):
-            st.plotly_chart(selection_trend(d, f, f"{cname(c)}: official vs estimate, 2026 forecast", 290),
+            st.plotly_chart(selection_trend(d, f, f"{cname(c)}: official vs backtest forecast, {FC_YEAR} sealed forecast", 290),
                             use_container_width=True, config=CFG, key=f"dc_trend_{'c' if compact else 'f'}")
     if compact:
         st.caption("Open **District look-up** for every year, every crop and the download.")
@@ -814,7 +977,7 @@ def district_card(name: str, compact: bool = False):
         st.markdown(f"##### Year by year · {cname(c)}")
         tab = d.sort_values("year", ascending=False)
         out = pd.DataFrame({"Year": tab.year.astype(int), "Official (dt/ha)": tab.actual.map(f1),
-                            "Estimate (dt/ha)": tab[model].map(f1),
+                            "Forecast (dt/ha)": tab[model].map(f1),
                             "Error (%)": (100 * (tab[model] / tab.actual - 1)).map(fs),
                             f"{RS} (dt/ha)": tab[ref].map(f1),
                             f"{RS} error (%)": (100 * (tab[ref] / tab.actual - 1)).map(fs)})
@@ -853,10 +1016,11 @@ if view == "Map":
     with left, panel("map", "slate"):
         yc, lc = st.columns([1.9, 3], vertical_alignment="center")
         my = yc.selectbox("Map year", MAP_YEARS, key="map_year", label_visibility="collapsed",
-                          format_func=lambda y: f"{y} forecast" if y == FC_YEAR else f"{y} harvest",
-                          help="2026: the sealed forecast. 2010–2025: the official harvest and the model's estimate.")
+                          format_func=lambda y: f"{y} sealed forecast" if y == FC_YEAR else f"{y} (harvest) · backtest forecast",
+                          help=f"{FC_YEAR}: the sealed forecast. {FIRST_YEAR}–{LAST_YEAR}: the official harvest and the backtest forecast "
+                               "from a model that never saw that season.")
         past = my != FC_YEAR
-        names = {"vs_normal": "vs normal", "level": "dt/ha", "error": "Estimate error", "accuracy": "Accuracy",
+        names = {"vs_normal": "vs normal", "level": "dt/ha", "error": "Forecast error", "accuracy": "Accuracy",
                  "gain": "Gain", "area": "Crop area"}
         one = crop != "All crops"
         layers = (["vs_normal"] + (["level"] if one else []) + (["error"] if past else []) + ["accuracy", "gain"]
@@ -881,17 +1045,17 @@ if view == "Map":
 
             def row(i):
                 r = YI.loc[i]
-                return (f"official {f1(r.actual)} dt/ha ({fs(r.off)}% vs normal)<br>estimate {f1(r[model])} dt/ha "
+                return (f"official {f1(r.actual)} dt/ha ({fs(r.off)}% vs normal)<br>forecast {f1(r[model])} dt/ha "
                         f"({fs(r.est)}%) · normal {f1(r['Long-term average'])}")
         if layer == "vs_normal" and past:
             v = YI.off if one else area_weighted(Y, "off")
             ev = None if one else area_weighted(Y, "est")
             fig = district_figure(v, f"{my}: official yield vs normal, {what}", DIV, diverging=True, unit="%",
                                   hover=lambda i, x: head(i) + (row(i) if one else
-                                                                f"official {fs(x)}% vs normal · estimate "
+                                                                f"official {fs(x)}% vs normal · forecast "
                                                                 f"{fs(ev.get(i))}%"))
             note = (f"How the {my} harvest went: blue = official yield above the district's normal, red = below. "
-                    "Hover for the model's estimate.")
+                    "Hover for the backtest forecast.")
         elif layer == "vs_normal":
             if one:
                 v = F_MAP.set_index("landkreis").vs_normal
@@ -921,24 +1085,24 @@ if view == "Map":
             note = "Grey shades: a quantity, not a judgement."
         elif layer == "error":
             if one:
-                fig = district_figure(YI.err, f"{my}: estimate vs official, {cname(crop)}", DIV, diverging=True,
+                fig = district_figure(YI.err, f"{my}: backtest forecast vs official, {cname(crop)}", DIV, diverging=True,
                                       unit="%", hover=lambda i, x: head(i) + row(i) + f"<br>error {fs(x)}%")
-                note = "Blue = estimate above the official yield, red = below."
+                note = "Blue = forecast above the official yield, red = below."
             else:
-                fig = district_figure(area_weighted(Y, "abserr"), f"{my}: size of the estimate error, {what}",
+                fig = district_figure(area_weighted(Y, "abserr"), f"{my}: size of the forecast error, {what}",
                                       SEQ_RED, clip=True, unit="%")
                 note = "Darker = larger error (absolute, so over- and under-estimates of different crops do not cancel)."
         elif layer == "accuracy":
             n = E_MAP.groupby("landkreis").size()
             v = acc_by(E_MAP, model)[n >= 5]
             fig = district_figure(v, f"accuracy {yr_txt}", SEQ_BLUE, clip=True, unit="%")
-            note = f"Accuracy over {yr_txt} (Years filter); districts with at least 5 estimates."
+            note = f"Accuracy over {yr_txt} (Years filter); districts with at least 5 backtest forecasts."
         elif layer == "gain":
             n = E_MAP.groupby("landkreis").size()
             v = (acc_by(E_MAP, model) - acc_by(E_MAP, ref))[n >= 5]
             fig = district_figure(v, f"gain vs {rshort(ref)}, {yr_txt}", DIV, diverging=True, unit=" pp")
             note = (f"Over {yr_txt} (Years filter): blue = more accurate than the {rshort(ref)}, red = less; "
-                    "districts with at least 5 estimates.")
+                    "districts with at least 5 backtest forecasts.")
         else:
             a = AREA[AREA.crop == crop].set_index("landkreis")
             fig = district_figure(a.share_of_farmland, f"{cname(crop)}, share of farmland (census)", SEQ_GREY,
@@ -965,7 +1129,7 @@ if view == "Map":
                 district_card(district, compact=True)
         elif crop != "All crops":
             with panel("trend", "sky"):
-                st.plotly_chart(selection_trend(E, F26, f"{cname(crop)} · {scope}: official vs estimate, 2026 forecast"),
+                st.plotly_chart(selection_trend(E, F26, f"{cname(crop)} · {scope}: official vs backtest forecast, {FC_YEAR} sealed forecast"),
                                 use_container_width=True, config=CFG, on_select=lambda: _year_click("trend_main"),
                                 selection_mode="points", key="trend_main")
                 st.caption("Click a year to show only that year.")
@@ -984,6 +1148,48 @@ if view == "Map":
                                 on_select=lambda: _year_click("year_main"), selection_mode="points", key="year_main")
                 st.caption("Click a season to show only that season.")
 
+    # Season by season as lines (user, 2026-10-31): does the forecast follow good and poor years, and how accurate
+    # was it each season? Both follow every filter.
+    l2, r2 = st.columns(2)
+    with l2, panel("swing", "slate"):
+        st.plotly_chart(swing_trend(E, F26, f"Forecast vs official, season by season · {scope}"),
+                        use_container_width=True, config=CFG, on_select=lambda: _year_click("swing_main"),
+                        selection_mode="points", key="swing_main")
+        st.caption("% above or below the district normal, averaged over the district-crop-years in the selection, so "
+                   f"all crops can be shown together. Diamond: the sealed {FC_YEAR} forecast with its 80% range, not "
+                   "yet scored. Click a season to show only that season.")
+    with r2, panel("accseason", "teal"):
+        st.plotly_chart(accuracy_lines(E, f"Accuracy by season · {scope}"), use_container_width=True, config=CFG,
+                        on_select=lambda: _year_click("acc_main"), selection_mode="points", key="acc_main")
+        st.caption("Accuracy (100 minus the mean % error) of the backtest forecasts in each season, next to the "
+                   "comparison. Poor seasons such as 2018 are where the simple averages fall furthest.")
+    l3, r3 = st.columns([1, 1])
+    with l3, panel("bydate", "violet"):
+        fig, g_ = date_chart(f"Accuracy by forecast date · {cname(crop) if crop != 'All crops' else 'all crops'} · "
+                         f"Germany · {FIRST_YEAR}–{LAST_YEAR}")
+        if fig is None:
+            st.info("No forecast-date results for this crop.")
+        else:
+            st.plotly_chart(fig, use_container_width=True, config=CFG)
+            st.caption("30 June and 31 July: the same networks run with weather and satellite data cut at that date "
+                       "(version v20, tested, not adopted). Harvest: the final model. Only the Crop filter applies. "
+                       f"Gap to the 5-year average: {fs(g_[0])} pp at 30 June, {fs(g_[1])} at 31 July, "
+                       f"{fs(g_[-1])} at harvest.")
+    with r3, panel("about", "sky"):
+        st.markdown("##### Data & method")
+        st.markdown(
+            f"- **Question:** the official yield of ten field crops in every German district, estimated at the end of "
+            f"the season, months before Destatis publishes it.\n"
+            f"- **Data:** official district yields (Destatis, table 41241-01-03-4); daily weather (DWD stations, "
+            f"ERA5-Land soil water); MODIS satellite vegetation indices over arable land; DWD crop development "
+            f"stages; SoilGrids soil; census crop areas. Seasons 2000–{LAST_YEAR}.\n"
+            f"- **Model:** {MODEL}, the average of three transformer networks (Temporal Fusion Transformer, "
+            f"iTransformer, PatchTST) plus a district error memory.\n"
+            f"- **Test:** each season {FIRST_YEAR}–{LAST_YEAR} forecast by a model trained only on earlier seasons "
+            f"(backtest); the {FC_YEAR} forecast sealed with a SHA-256 fingerprint before the official figures.\n"
+            "- **Code:** github.com/roshangupta00750/transformer-based-crop-yield-prediction · **Model and data:** "
+            "huggingface.co/Roshangupta007/YieldFormer-DE · **Report:** the written project report (JMU Würzburg).")
+
 elif view == "District look-up":
     names = sorted(pool.district.dropna().unique())
     opts = ["– choose a district –"] + names
@@ -999,28 +1205,62 @@ elif view == "District look-up":
 elif view == "Table & download":
     T = E.assign(o=E.crop.map(ORDER)).sort_values(["year", "state", "district", "o"],
                                                    ascending=[False, True, True, True])
-    show = pd.DataFrame({"Year": T.year.astype(int), "State": T.state.map(sname), "District": T.district,
-                         "Crop": T.crop.map(cname), "Official (dt/ha)": T.actual.map(f1),
-                         "Estimate (dt/ha)": T[model].map(f1), "Error (%)": (100 * (T[model] / T.actual - 1)).map(fs),
-                         f"{RS} (dt/ha)": T[ref].map(f1),
-                         f"{RS} error (%)": (100 * (T[ref] / T.actual - 1)).map(fs)})
     with panel("estimates", "rose"):
-        st.markdown(f"##### Estimates in the selection ({plural(len(show), 'row')}) · narrow it with the filters above")
-        paged(show, "pg_tbl", numeric=("Year", "Official (dt/ha)", "Estimate (dt/ha)", "Error (%)",
-                                       f"{RS} (dt/ha)", f"{RS} error (%)"))
+        lc_, rc_ = st.columns([1.4, 1])
+        level = lc_.radio("Level", LEVELS, horizontal=True, key="tbl_level",
+                          help="District: one row per district, crop and year. State, Region, Germany: the district "
+                               "yields of the selection averaged with each district's crop area as weight, as official "
+                               "state and national yields are.")
+        with rc_:
+            q = search_box("tbl_search")
+        L = by_level(T, ["actual", model, ref], level)
+        if level != "District":
+            L = L.assign(o=L.crop.map(ORDER)).sort_values(["year", "unit", "o"], ascending=[False, True, True])
+        else:
+            L = L.assign(state_name=L.state.map(sname))
+        if q:
+            hay = (L.unit.astype(str) + " " + (L.state_name if "state_name" in L else "")).str.lower()
+            L = L[hay.str.contains(q, regex=False)]
+        e_m, e_r = 100 * (L[model] / L.actual - 1), 100 * (L[ref] / L.actual - 1)
+        unit_col = {"District": "District", "State": "State", "Region": "Region", "Germany": "Area"}[level]
+        show = pd.DataFrame({"Season": L.year.astype(int).astype(str) + " (harvest)"})
+        if level == "District":
+            show["State"] = L.state_name
+        show[unit_col] = L.unit
+        show["Crop"] = L.crop.map(cname)
+        if level != "District":
+            show["Districts"] = L.n.astype(int)
+        show = show.assign(**{"Official (dt/ha)": L.actual.map(f1), "Forecast (dt/ha)": L[model].map(f1),
+                              "Error (%)": e_m.map(fs), f"{RS} (dt/ha)": L[ref].map(f1), f"{RS} error (%)": e_r.map(fs),
+                              "Gain (pp)": (e_r.abs() - e_m.abs()).map(fs)})
+        st.markdown(f"##### Backtest forecasts in the selection: official vs forecast by {level.lower()} "
+                    f"({plural(len(show), 'row')})")
+        st.caption("Backtest forecast = the forecast for a past season (harvest year in brackets) from a model trained only "
+                   "on earlier seasons, so it never saw that year. The sealed forecasts for future seasons are under "
+                   "Forecasts. "
+                   "Gain = how many percentage points closer to the official yield than the comparison.")
+        paged(show, "pg_tbl", numeric=("Districts", "Official (dt/ha)", "Forecast (dt/ha)", "Error (%)",
+                                       f"{RS} (dt/ha)", f"{RS} error (%)", "Gain (pp)"))
+    level_csv = (L[["year", "unit", "crop", "n", "actual", model, ref]]
+                 .rename(columns={"unit": level.lower(), "n": "districts", "actual": "official_dt_ha",
+                                  model: "estimate_dt_ha", ref: "comparison_dt_ha"})
+                 .assign(estimate_model=model, comparison=ref, level=level.lower()).round(2))
     with panel("downloads", "green"):
         st.markdown("##### Downloads")
         st.checkbox("German Excel format (semicolon, decimal comma)", key="csv_de")
         slug = file_slug(crop if crop != "All crops" else "all-crops", sname(state) if state != "All states" else region if region != "All regions" else "germany",
                          CODE_OF.get(district) if district != "All districts" else "", yr_txt)
-        d1, d2, d3 = st.columns(3)
+        d0, d1, d2, d3 = st.columns(4)
+        d0.download_button(f"⤓ {level} table as shown (CSV)", csv_bytes(level_csv),
+                           file_name=f"yieldformer_de_{level.lower()}_table_{slug}.csv", mime="text/csv",
+                           width="stretch")
         raw = (T[["year", "landkreis", "state", "district", "crop", "actual", model, ref]]
                .assign(state=lambda x: x.state.map(sname))
                .rename(columns={"landkreis": "nuts_code", "actual": "official_dt_ha", model: "estimate_dt_ha",
                                 ref: "comparison_dt_ha"})
                .assign(estimate_model=model, comparison=ref).round(2))
-        d1.download_button("⤓ Estimates in this selection (CSV)", csv_bytes(raw),
-                           file_name=f"yieldformer_de_estimates_{slug}.csv", mime="text/csv", width="stretch")
+        d1.download_button("⤓ Backtest forecasts in this selection (CSV)", csv_bytes(raw),
+                           file_name=f"yieldformer_de_backtest_forecasts_{slug}.csv", mime="text/csv", width="stretch")
         fc = (F26.assign(state=F26.landkreis.map(STATE_OF).map(sname), o=F26.crop.map(ORDER))
               .sort_values(["state", "district", "o"])
               [["landkreis", "state", "district", "crop", "y_pred", "lo80", "hi80", "y_hist", "vs_normal", "model",
@@ -1033,9 +1273,14 @@ elif view == "Table & download":
         dictionary = pd.DataFrame([
             ("nuts_code", "district code (NUTS 3, 2021)"),
             ("official_dt_ha", "yield reported by Destatis (Regionalstatistik table 41241-01-03-4), dt/ha"),
-            ("estimate_dt_ha", "estimate of estimate_model for a year that model never saw"),
+            ("estimate_dt_ha", "backtest forecast of estimate_model for a season (harvest year) that model never saw: trained "
+                               "only on earlier seasons"),
             ("comparison_dt_ha", "the comparison named in 'comparison' (5-year average, long-term average or XGBoost "
                                  "reference)"),
+            ("level / districts", "table level (district, state, region, germany) and the number of districts averaged; "
+                                  "above district level the yields are weighted by census crop area"),
+            ("forecast_year / official_dt_ha (sealed)", "season of a sealed forecast; its official yield once "
+                                                        "Destatis has published it, empty before"),
             ("forecast_dt_ha", f"sealed 2026 forecast of {MODEL}"),
             ("low80_dt_ha / high80_dt_ha", "80% range from past errors"),
             ("normal_dt_ha", "district normal for 2026: long-term mean plus a trend if clear"),
@@ -1050,9 +1295,11 @@ elif view == "Forecasts":
         st.markdown(f"<div class='sub'>Forecast shown: <b>{MODEL}</b>, sealed {dfmt(META.issued)} with data to "
                     f"{dfmt(META.data_end)} · {plural(len(F26), 'district-crop forecast')} in the selection · not yet "
                     f"scored: Destatis has not published 2026 district yields."
-                    + (" The Model filter applies to the 2010–2025 estimates only." if model != MODEL else "")
+                    + (" The Model filter applies to the 2010–2025 backtest forecasts only." if model != MODEL else "")
                     + "</div>", unsafe_allow_html=True)
-    left, right = st.columns([1, 1.2])
+    SF = (sealed_files(max(f.stat().st_mtime for f in SEALED.iterdir()))
+          if (SEALED / "FROZEN.sha256").exists() else pd.DataFrame())
+    left, right = st.columns([1, 1])
     with left, panel("fcchart", "violet"):
         if F26.empty:
             st.info("No 2026 forecast for this selection.")
@@ -1072,7 +1319,7 @@ elif view == "Forecasts":
                         f"2026 forecast vs normal · {scope}", customdata=np.c_[t.pred, t.norm, t.above, t.p10, t.p90],
                         hover="%{y}: %{x:+.1f}% vs normal<br>forecast %{customdata[0]:.1f} dt/ha, normal "
                               "%{customdata[1]:.1f}<br>%{customdata[2]:.0f}% of districts above normal<br>districts "
-                              "range %{customdata[3]:+.1f} to %{customdata[4]:+.1f}%<extra></extra>", unit="%", h=380)
+                              "range %{customdata[3]:+.1f} to %{customdata[4]:+.1f}%<extra></extra>", unit="%", h=470)
             st.plotly_chart(fig, use_container_width=True, config=CFG)
             st.caption("Bar: forecast vs normal, weighted by crop area (as the card). Thin line: spread across "
                        "districts (10th to 90th percentile).")
@@ -1101,16 +1348,125 @@ elif view == "Forecasts":
                               x=0), xaxis=dict(ticksuffix="%", title="forecast vs normal"), yaxis_title="districts")
             st.plotly_chart(fig, use_container_width=True, config=CFG)
             st.caption(f"{int((v >= 0).sum())} of {plural(len(v), 'district')} above their normal yield.")
-    with right, panel("fctable", "rose"):
+    with right, panel("sealed", "green"):
+        st.markdown("##### Sealed forecast files")
+        st.caption("Each forecast was saved as a file before its season's official yields existed, and its SHA-256 "
+                   "fingerprint was recorded the same day in FROZEN.sha256 (kept in the project's git history). The "
+                   "fingerprint is recomputed here every time: ✓ means the file is byte for byte the one sealed on "
+                   "its issue date. Download a file to check it yourself: sha256sum -c FROZEN.sha256. The 2027 and 2028 "
+                   "files carry 'yieldformer' in their names but contain district normals: the model's rule for a "
+                   "season that has not started. A public copy is on Hugging Face (Roshangupta007/YieldFormer-DE), "
+                   "uploaded 30 Oct 2026, after the issue dates.")
+        if SF.empty:
+            st.info("No sealed files found in results/forecasts.")
+        else:
+            kind = F_ALL.drop_duplicates("file").set_index("file").model.to_dict()
+
+            def label(f: str) -> str:
+                if f == META_FILE:
+                    return "YieldFormer-DE (v18) · final model"
+                if "baseline" in f:
+                    return "District normal · pre-registered"
+                if kind.get(f) == "District normal":
+                    return "District normal · rule before the season"
+                if kind.get(f):
+                    return f"{kind[f]} · earlier main model"
+                return "Pre-registered test (v1)"
+            table(pd.DataFrame({"Season": SF.year.astype(int), "Forecast": SF.file.map(label),
+                                "Issued": SF.issued.map(dfmt), "Fingerprint": SF.recorded.str[:12] + "…",
+                                "Check": SF.check.map({"ok": "✓ unchanged", "changed": "✗ changed",
+                                                       "missing": "file missing"})}),
+                  numeric=("Season",))
+            pick = st.selectbox("Sealed file", SF.file, key="sealed_pick", label_visibility="collapsed",
+                                format_func=lambda f: f"{f}")
+            if (SEALED / pick).exists():
+                st.download_button("⤓ Download this sealed file, unchanged", (SEALED / pick).read_bytes(),
+                                   file_name=pick, mime="text/csv", width="stretch")
+            st.download_button("⤓ FROZEN.sha256 (the recorded fingerprints)", (SEALED / "FROZEN.sha256").read_bytes(),
+                               file_name="FROZEN.sha256", mime="text/plain", width="stretch")
+
+    FYEARS = sorted(int(y) for y in F_ALL.year.unique())
+    with panel("fctable", "rose"):
+        a_, b_ = st.columns([1.4, 1])
+        fy = a_.radio("Season", FYEARS, horizontal=True, key="fc_year",
+                      format_func=lambda y: f"{y} · {'final model' if y == FC_YEAR else 'district normal'}")
+        with b_:
+            q = search_box("fc_search")
+        src = F_ALL[(F_ALL.year == fy) & (F_ALL.model == (MODEL if fy == FC_YEAR else "District normal"))]
+        T = select(src, use_years=False)
         last = E_ALL[E_ALL.year == LAST_YEAR][["landkreis", "crop", "actual"]]
-        T = F26.merge(last, on=["landkreis", "crop"], how="left").assign(o=lambda x: x.crop.map(ORDER))
-        T = T.sort_values(["district", "o"])
-        out = pd.DataFrame({"District": T.district, "Crop": T.crop.map(cname), "Forecast": T.y_pred.map(f1),
-                            "Low 80%": T.lo80.map(f1), "High 80%": T.hi80.map(f1), "Normal": T.y_hist.map(f1),
-                            "vs normal (%)": T.vs_normal.map(fs), "Official 2025": T.actual.map(f1)})
-        st.markdown(f"##### District forecasts, dt/ha ({plural(len(out), 'row')})")
-        paged(out, "pg_fc", numeric=("Forecast", "Low 80%", "High 80%", "Normal", "vs normal (%)", "Official 2025"),
-              per=12)
+        T = T.merge(last, on=["landkreis", "crop"], how="left")
+        off = OFFICIAL[OFFICIAL.year == fy][["landkreis", "crop", "official"]] if not OFFICIAL.empty else None
+        if off is not None and len(off):
+            T = T.merge(off, on=["landkreis", "crop"], how="left")
+        T = T.assign(state_name=T.landkreis.map(STATE_OF).map(sname), o=T.crop.map(ORDER)).sort_values(["district", "o"])
+        if q:
+            T = T[(T.district.astype(str) + " " + T.state_name).str.lower().str.contains(q, regex=False)]
+        out = pd.DataFrame({"District": T.district, "State": T.state_name, "Crop": T.crop.map(cname),
+                            "Forecast": T.y_pred.map(f1), "Low 80%": T.lo80.map(f1), "High 80%": T.hi80.map(f1),
+                            "Normal": T.y_hist.map(f1), "vs normal (%)": T.vs_normal.map(fs),
+                            f"Official {LAST_YEAR}": T.actual.map(f1)})
+        num = ["Forecast", "Low 80%", "High 80%", "Normal", "vs normal (%)", f"Official {LAST_YEAR}"]
+        if "official" in T:
+            out[f"Official {fy}"] = T.official.map(f1)
+            out["Error (%)"] = (100 * (T.y_pred / T.official - 1)).map(fs)
+            num += [f"Official {fy}", "Error (%)"]
+        st.markdown(f"##### District forecasts for {fy}, dt/ha ({plural(len(out), 'row')})")
+        if fy != FC_YEAR:
+            st.caption(f"{fy} was sealed before its season began, so there is no weather or satellite data yet: the "
+                       "forecast is the district normal (mean of earlier years plus a trend if clear). It is the no-skill "
+                       "reference the final model has to beat in that season.")
+        st.caption("– = no official yield published for that district and crop.")
+        paged(out, "pg_fc", numeric=tuple(num), per=12)
+
+    with panel("reveal", "sky"):
+        st.markdown(f"##### Revealed: sealed {FC_YEAR} forecast vs official yield")
+        V1 = load_csv("forecast_2026.csv")            # the pre-registered test file, as written by scripts/63
+        R = select(F26_ALL, use_years=False)
+        if not OFFICIAL.empty:
+            R = R.merge(OFFICIAL[OFFICIAL.year == FC_YEAR][["landkreis", "crop", "official"]],
+                        on=["landkreis", "crop"], how="inner")
+        if OFFICIAL.empty or R.empty:
+            st.markdown(f"<div class='sub'>Not revealed yet: Destatis has not published the {FC_YEAR} district yields. "
+                        "When it does, this panel fills in by itself and scores both sealed files against the official "
+                        f"yields: the pre-registered test file of {dfmt(V1.issued.iloc[0]) if len(V1) else '–'} and the "
+                        f"final model's file of {dfmt(META.issued) if META is not None else '–'}, each next to the "
+                        "district normal. The ✓ above shows both files are unchanged.</div>",
+                        unsafe_allow_html=True)
+        else:
+            a_m, a_n = acc(R.y_pred, R.official), acc(R.y_hist, R.official)
+            k_ = st.columns(3)
+            card(k_[0], f"Accuracy {FC_YEAR}", f"{a_m:.1f}%", f"district normal {a_n:.1f}%", hero=True,
+                 chip=(f"{fs(a_m - a_n)} pp", a_m >= a_n), small=True, accent=ACCENT["forecast"])
+            R_ = R.assign(actual=R.official)
+            per = acc_by(R_, "y_pred") > acc_by(R_, "y_hist")
+            card(k_[1], "Districts closer", f"{int(per.sum())} of {len(per)}", "than the district normal",
+                 small=True)
+            card(k_[2], "Within ±10%", f"{100 * np.mean(np.abs(R.y_pred / R.official - 1) <= 0.10):.0f}%",
+                 f"normal {100 * np.mean(np.abs(R.y_hist / R.official - 1) <= 0.10):.0f}%", small=True)
+            rows = [(cname(c), len(g), acc(g.y_pred, g.official), acc(g.y_hist, g.official))
+                    for c in CROPS if len(g := R[R.crop == c])]
+            t = pd.DataFrame(rows, columns=["Crop", "Districts", "Forecast accuracy (%)", "District normal accuracy (%)"])
+            t["Gain (pp)"] = (t["Forecast accuracy (%)"] - t["District normal accuracy (%)"]).map(fs)
+            for c in ["Forecast accuracy (%)", "District normal accuracy (%)"]:
+                t[c] = t[c].map(f1)
+            table(t, numeric=("Districts", "Forecast accuracy (%)", "District normal accuracy (%)", "Gain (pp)"))
+            off_ = OFFICIAL[OFFICIAL.year == FC_YEAR][["landkreis", "crop", "official"]]
+            both = []
+            for nm, F_ in ((f"Pre-registered test (v1), sealed {dfmt(V1.issued.iloc[0])}" if len(V1) else None, V1),
+                           (f"{MLABEL[MODEL]}, sealed {dfmt(META.issued)}", F26_ALL)):
+                if nm is None:
+                    continue
+                Q = select(F_, use_years=False).merge(off_, on=["landkreis", "crop"], how="inner")
+                if len(Q):
+                    both.append((nm, len(Q), acc(Q.y_pred, Q.official), acc(Q.y_hist, Q.official)))
+            if both:
+                st.markdown("###### Both sealed files, each against the district normal in its own file")
+                B = pd.DataFrame(both, columns=["Sealed file", "Forecasts", "Accuracy (%)", "District normal (%)"])
+                B["Gain (pp)"] = (B["Accuracy (%)"] - B["District normal (%)"]).map(fs)
+                for c in ["Accuracy (%)", "District normal (%)"]:
+                    B[c] = B[c].map(f1)
+                table(B, numeric=("Forecasts", "Accuracy (%)", "District normal (%)", "Gain (pp)"))
     PR = load_csv("prelim_2026.csv")
     if not PR.empty:
         with panel("prelim", "teal"):
@@ -1123,7 +1479,7 @@ elif view == "Forecasts":
                 return float((100 * (f.groupby("crop")[col].mean().reindex(off.index) / off - 1)).abs().mean())
             rows = [(MLABEL[MODEL], PR[MODEL].abs().mean(), plain(F26_ALL, "y_pred")),
                     (MLABEL["YieldFormer-DE-i (v15)"], PR["YieldFormer-DE-i (v15)"].abs().mean(), plain(v15, "y_pred")),
-                    ("Normal-year forecast (district normals)", PR["Normal year"].abs().mean(), plain(F26_ALL, "y_hist"))]
+                    ("District normal", PR["Normal year"].abs().mean(), plain(F26_ALL, "y_hist"))]
             R = pd.DataFrame(rows, columns=["Forecast", "Area-weighted, as official (%)", "Plain mean of districts (%)"])
             lc, rc = st.columns([1.3, 1])
             with lc:
@@ -1132,16 +1488,11 @@ elif view == "Forecasts":
             ahead_p = R.iloc[0, 2] < R.iloc[2, 2]
             rc.caption("Mean absolute error of the national yield. A national yield is the district yields weighted by "
                        f"crop area: on that basis YieldFormer-DE is {'closer' if ahead_w else 'further away'} than the "
-                       f"normal-year forecast. With a plain mean of the districts it is "
+                       f"district normal. With a plain mean of the districts it is "
                        f"{'closer' if ahead_p else 'further away'}. One season and preliminary figures: this is not the "
-                       "registered test, which uses the district yields once published.")
-    with st.expander("Also sealed: 2027 and 2028 (district normals, no season data) and the earlier 2026 files, "
-                     "with their SHA-256 fingerprints"):
-        files = F_ALL.drop_duplicates("file")
-        table(pd.DataFrame({"Year": files.year.astype(int), "Forecast": files.model, "Issued": files.issued.map(dfmt),
-                            "Data to": files.data_end.map(lambda d: dfmt(d) if str(d)[:2] == "20" else d),
-                            "File": files.file, "SHA-256": files.sha256.astype(str).str[:16] + "…"}))
-
+                       "registered test, which uses the district yields once published. These preliminary figures were "
+                       "published in August 2026 (potatoes 24 Sep), before every 2026 file was sealed; the final "
+                       "model was chosen by the written rule on earlier seasons, not by this check.")
 else:  # Compare
     part = st.radio("Benchmark", ["Simple averages and members", "Seasons & regions", "Published models",
                                   "JRC MARS 2025", "Poor years", "Computing cost"],
@@ -1154,7 +1505,7 @@ else:  # Compare
                  f"{yr_txt} accuracy (%)": f1(acc(E[m], E.actual)),
                  "Within ±10% (%)": f1(100 * np.mean(np.abs(E[m] / E.actual - 1) <= 0.1))} for m in MODELS + COMPARE]
         with panel("simple", "rose"):
-            st.markdown(f"##### Accuracy on the same {plural(len(E), 'estimate')} · "
+            st.markdown(f"##### Accuracy on the same {plural(len(E), 'backtest forecast')} · "
                         f"{cname(crop) if crop != 'All crops' else 'all crops'} · {html.escape(scope)}")
             R = pd.DataFrame(rows)
             table(R, numeric=tuple(R.columns[1:]))
@@ -1164,7 +1515,7 @@ else:  # Compare
     elif part == "Seasons & regions":
         short = {MODEL: "YieldFormer-DE", "YieldFormer-DE-T (v17)": "TFT", "YieldFormer-DE-i (v15)": "iTransformer",
                  "YieldFormer-DE-P (v17)": "PatchTST", "XGBoost + memory (reference)": "XGBoost ref.",
-                 "5-year average": "5-yr avg", "Long-term average": "Long-term avg"}
+                 "5-year average": "5-yr avg", "Long-term average": "Normal"}
         cols = list(dict.fromkeys(MODELS + ["XGBoost + memory (reference)", ref]))
         A = pd.DataFrame({m: acc_by(E, m, "year") for m in cols})
         best = A[MODELS].max(axis=1)
@@ -1427,14 +1778,14 @@ else:  # Compare
             for m in (model, ref):
                 e_ = 100 * (g[m] / g["Long-term average"] - 1)
                 sig = e_ < thr if thr == 0 else e_ <= thr
-                rules.append({"Signal when the estimate is": lab, "Estimate by": MLABEL.get(m, m),
+                rules.append({"Signal when the forecast is": lab, "Forecast by": MLABEL.get(m, m),
                               "Poor crop-years detected": f"{int((poor & sig).sum())} of {int(poor.sum())}",
                               "False alarms": f"{int((~poor & sig).sum())} of {int((~poor).sum())}",
                               "… of them in years 5–10% below normal": f"{int((~poor & sig & (real <= -5)).sum())}"})
         with panel("poortable", "rose"):
             st.markdown(f"##### Poor crop-years (mean official yield ≥10% below normal) · {html.escape(scope)} · {yr_txt}")
             table(pd.DataFrame(rules))
-            st.caption("A crop-year is one crop in one year, averaged over the districts in the selection. The estimate is "
+            st.caption("A crop-year is one crop in one year, averaged over the districts in the selection. The backtest forecast is "
                        "made at harvest from the season's data: detection before the statistics appear, not an early "
                        "warning. Many false alarms fall in years 5–10% below normal, i.e. poor but not past the 10% line.")
         if poor.any():
@@ -1444,7 +1795,7 @@ else:  # Compare
                 P = P.assign(o=P.crop.map(ORDER)).sort_values(["o", "year"])
                 lab_ = [f"{cname(c)} {y}" for c, y in zip(P.crop, P.year)]
                 fig = go.Figure()
-                for col, nm, colr in (("real", "Official", INK), ("refv", ref, GREY), ("est", "Estimate", BLUE)):
+                for col, nm, colr in (("real", "Official", INK), ("refv", dn(ref), GREY), ("est", "Forecast (backtest)", BLUE)):
                     fig.add_trace(go.Scatter(x=P[col], y=lab_, mode="markers", name=nm, marker=dict(color=colr, size=10),
                                              hovertemplate="%{y}: %{x:+.1f}% vs normal<extra>" + nm + "</extra>"))
                 fig.add_vline(x=-10, line_color=RED, line_dash="dot", annotation_text="poor: −10%",
@@ -1459,8 +1810,8 @@ else:  # Compare
 # --------------------------------------------------------------------------- footer
 with st.expander("About this dashboard"):
     st.markdown(
-        f"- **What it shows.** Official district yields from Destatis, the estimates of {MODEL} for 2010–2025 "
-        "(each year estimated by a model trained only on earlier years) and the sealed 2026 forecast.\n"
+        f"- **What it shows.** Official district yields from Destatis, the backtest forecasts of {MODEL} for 2010–2025 "
+        "(each season forecast by a model trained only on earlier seasons) and the sealed 2026 forecast.\n"
         f"- **{MODEL}** is the average of three transformer networks (TFT, iTransformer, PatchTST) plus a district "
         "error memory. XGBoost + memory is a reference only, not a candidate model.\n"
         "- **Accuracy** = 100 minus the mean absolute percentage error. **Normal** = the district's long-term mean "

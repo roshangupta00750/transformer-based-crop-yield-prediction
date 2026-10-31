@@ -391,6 +391,16 @@ def main() -> None:
         Y["district"] = Y["landkreis"].map(names)
         Y["vs_normal"] = 100 * (Y.y_pred / Y.y_hist - 1)
         Y.to_csv(OUT / "forecast_yieldformer.csv", index=False)
+        # Official district yields of the sealed years, once Destatis has published them. Empty until then; the
+        # dashboard's "Revealed" panel turns on by itself when rows appear here (after the yield data is refreshed).
+        yld = ROOT / "data/interim/yield.parquet"
+        off = pd.read_parquet(yld) if yld.exists() else pd.DataFrame(columns=["landkreis", "crop", "year", "yield_dt_per_ha"])
+        (off[off.year.isin(Y.year.unique())].rename(columns={"yield_dt_per_ha": "official"})
+         [["landkreis", "crop", "year", "official"]].to_csv(OUT / "official_sealed_years.csv", index=False))
+    # Accuracy by forecast date (v20 in-season runs, data cut 30 June / 31 July) next to the harvest-time model
+    for src, dst in (("v20_inseason.csv", "inseason.csv"), ("v20_inseason_by_crop.csv", "inseason_by_crop.csv")):
+        if (MET / src).exists():
+            pd.read_csv(MET / src).to_csv(OUT / dst, index=False)
     # 2024/2025 backtests of every transformer (rolling folds; v18 reporting)
     if (MET / "v18_predictions.parquet").exists():
         B = pd.read_parquet(MET / "v18_predictions.parquet")
