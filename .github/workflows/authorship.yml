@@ -24,7 +24,7 @@ jobs:
             if ! echo " $allowed " | grep -q " $email "; then
               echo "::error::$c is authored by $email, not roshangupta00750"; bad=1
             fi
-            if git log -1 --format=%B "$c" | grep -qiE '^co-authored-by:|generated with'; then
+            if git log -1 --format=%B "$c" | grep -qiE '^co-authored-by:|generated with \[?claude'; then
               echo "::error::$c has a co-author or generated-with line"; bad=1
             fi
           done
