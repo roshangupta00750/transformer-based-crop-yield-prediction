@@ -137,7 +137,10 @@ section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {gap: 0.55rem;}
 .block-container {padding-top: 2.9rem; padding-bottom: 1rem; max-width: 1500px;}
 .block-container [data-testid="stVerticalBlock"] {gap: 0.6rem;}
 .band {background: linear-gradient(100deg, #12345a 0%, #1d5a9c 62%, #2a78d6 100%); border-radius: 14px;
-       padding: 12px 20px 9px 20px; margin-bottom: 1rem;}   /* offsets Streamlit's -1rem under markdown */
+       padding: 12px 196px 9px 20px; margin-bottom: 1rem; position: relative; min-height: 70px;}   /* offsets Streamlit's -1rem under markdown */
+.band .logo {position: absolute; right: 16px; top: 50%; transform: translateY(-50%); height: 52px;
+             background: #fff; border-radius: 8px; padding: 3px 6px;}   /* university logo from the final deck */
+@media (max-width: 760px) {.band {padding-right: 20px;} .band .logo {display: none;}}
 .title {font-size: 1.35rem; font-weight: 700; color: #fff; margin-right: 10px;}
 .chip {display: inline-block; background: rgba(255,255,255,.16); color: #fff; border-radius: 12px; padding: 1px 10px;
        font-size: 0.78rem; margin: 0 6px 0 0; white-space: nowrap;}
@@ -484,7 +487,8 @@ def _set_from(target: str, key: str):
 
 # --------------------------------------------------------------------------- header + filter panel (left sidebar)
 sealed = f"2026 forecast sealed {dfmt(META.issued)} · data to {dfmt(META.data_end)}" if META is not None else ""
-st.markdown(f"<div class='band'><span class='title'>YieldFormer-DE · district crop yields in Germany</span>"
+st.markdown(f"<div class='band'><img class='logo' src='app/static/jmu_logo.png' alt='Universität Würzburg'>"
+            f"<span class='title'>YieldFormer-DE · district crop yields in Germany</span>"
             f"<span class='chip'>backtest forecasts 2010–2025: each season from a model that never saw it</span>"
             f"<span class='chip'>{html.escape(sealed)}</span>"
             f"<div class='limits'>Limits: uses weather up to harvest, so it comes before the official statistics, not "
