@@ -660,7 +660,10 @@ elif crop != "All crops":
          help_=f"Mean of the districts. Typical range {F26.lo80.mean():.1f}–{F26.hi80.mean():.1f} dt/ha.")
 else:
     nat = F26.groupby("crop")[["y_pred", "y_hist"]].mean()
-    tot = area_weighted(F26.assign(landkreis="all")).iloc[0]
+    fa = F26.dropna(subset=["vs_normal"]).merge(AREA[["landkreis", "crop", "area_ha"]], on=["landkreis", "crop"],
+                                                how="left")       # all crops: weighted by each crop's census area
+    wa = fa.area_ha.fillna(0.0)
+    tot = float(np.average(fa.vs_normal, weights=wa)) if wa.sum() > 0 else float(fa.vs_normal.mean())
     card(k[4], "2026 forecast", f"{fs(tot)}%", "vs normal", accent=ACCENT["forecast"],
          help_=f"All crops, weighted by crop area. {int((nat.y_pred > nat.y_hist).sum())} of {len(nat)} crops above normal.")
 st.markdown(f"<div class='sub' style='margin:10px 0 2px 0'>Selection: "
@@ -1222,8 +1225,8 @@ if view == "Map":
     with r3, panel("about", "sky"):
         st.markdown("##### Data & method")
         st.markdown(
-            f"- **Question:** the official yield of ten field crops in every German district, estimated at the end of "
-            f"the season, months before Destatis publishes it.\n"
+            f"- **Question:** the official yield of ten field crops in the {E_ALL.landkreis.nunique()} German districts "
+            f"with official yields, estimated at the end of the season, months before Destatis publishes it.\n"
             f"- **Data:** official district yields (Destatis, table 41241-01-03-4); daily weather (DWD stations, "
             f"ERA5-Land soil water); MODIS satellite vegetation indices over arable land; DWD crop development "
             f"stages; SoilGrids soil; census crop areas. Seasons 2000–{LAST_YEAR}. District boundaries: "

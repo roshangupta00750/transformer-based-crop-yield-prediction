@@ -11,7 +11,8 @@ Two kinds of rows, never mixed up:
                  checked against FROZEN.sha256 before scoring. 2026 is the
                  first year forecast before its yields exist.
 
-Actual yields: data/interim/yield.parquet (Destatis 41241-01-03-4). A year is
+Actual yields: data/interim/yield_v5.parquet (Destatis 41241-01-03-4, corrected district matching of
+2026-10-03; the older yield.parquet mixed up cities and districts of the same name). A year is
 scored as soon as it appears there; until then it is listed as awaiting.
 
 Per (year, crop): districts, R², RMSE, MAE (dt/ha), skill vs the historical
@@ -91,7 +92,7 @@ def score(g: pd.DataFrame) -> dict:
 
 
 def main() -> None:
-    actual = (pd.read_parquet(ROOT / "data/interim/yield.parquet")
+    actual = (pd.read_parquet(ROOT / "data/interim/yield_v5.parquet")
                 .rename(columns={"yield_dt_per_ha": "y_true"})[["landkreis", "crop", "year", "y_true"]])
     L = pd.concat([backtests(), prospective(actual)], ignore_index=True)
     OUT.mkdir(parents=True, exist_ok=True)

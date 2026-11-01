@@ -393,7 +393,7 @@ def main() -> None:
         Y.to_csv(OUT / "forecast_yieldformer.csv", index=False)
         # Official district yields of the sealed years, once Destatis has published them. Empty until then; the
         # dashboard's "Revealed" panel turns on by itself when rows appear here (after the yield data is refreshed).
-        yld = ROOT / "data/interim/yield.parquet"
+        yld = ROOT / "data/interim/yield_v5.parquet"   # corrected district matching (2026-10-03); yield.parquet is older
         off = pd.read_parquet(yld) if yld.exists() else pd.DataFrame(columns=["landkreis", "crop", "year", "yield_dt_per_ha"])
         (off[off.year.isin(Y.year.unique())].rename(columns={"yield_dt_per_ha": "official"})
          [["landkreis", "crop", "year", "official"]].to_csv(OUT / "official_sealed_years.csv", index=False))

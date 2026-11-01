@@ -233,3 +233,17 @@ def test_how_to_read_is_one_click_away(app):
     assert "The five cards" in text and "Backtest and sealed forecasts" in text and "Limits" in text
     assert "How to read the cards:" not in text
     assert "How to read this dashboard" in text
+
+
+def test_2026_card_is_weighted_by_crop_area(app):
+    """Cross-check 2026-11-02: the card said 'weighted by crop area' but showed the plain mean (+0.2% instead of +0.4%)."""
+    import numpy as np
+    import pandas as pd
+    d = ROOT / "results" / "dashboard"
+    f = pd.read_csv(d / "forecast_yieldformer.csv")
+    f = f[(f.model == "YieldFormer-DE (v18)") & (f.year == f[f.model == "YieldFormer-DE (v18)"].year.max())]
+    a = pd.read_csv(d / "crop_area.csv")[["landkreis", "crop", "area_ha"]]
+    m = f.merge(a, on=["landkreis", "crop"], how="left")
+    want = np.average(m.vs_normal, weights=m.area_ha.fillna(0))
+    card = [x.value for x in app.markdown if "data-spot='2026-forecast'" in x.value][0]
+    assert f"{want:+.1f}%".replace("-", "−") in card
