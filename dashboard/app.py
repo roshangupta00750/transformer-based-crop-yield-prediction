@@ -167,9 +167,10 @@ section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {gap: 0.55rem;}
 [class*="st-key-pnl-"] {border-radius: 12px; padding: 12px 14px 14px 14px; transition: box-shadow .2s;}
 [class*="st-key-pnl-"] h5 {font-size: 0.98rem !important; font-weight: 650 !important; padding-bottom: 0.3rem;}
 /* panels side by side end at the same height: the last panel in a column grows (Streamlit wraps each panel) */
-[data-testid="stColumn"] > [data-testid="stVerticalBlock"]:has(> [data-testid="stLayoutWrapper"] > [class*="st-key-pnl-"]) {height: 100%;}
-[data-testid="stColumn"] > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]:last-child:has(> [class*="st-key-pnl-"]) {flex-grow: 1;}
-[data-testid="stLayoutWrapper"] > [class*="st-key-pnl-"] {height: 100%;}
+/* only columns that hold a single panel (the map column keeps its natural height, so the map is never resized) */
+[data-testid="stColumn"] > [data-testid="stVerticalBlock"]:has(> [data-testid="stLayoutWrapper"]:only-child > [class*="st-key-pnl-"]) {height: 100%;}
+[data-testid="stColumn"] > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]:only-child:has(> [class*="st-key-pnl-"]) {flex-grow: 1;}
+[data-testid="stColumn"] > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]:only-child > [class*="st-key-pnl-"] {height: 100%;}
 [data-testid="stCaptionContainer"] p {max-width: 900px;}
 html, [data-testid="stMain"] {scrollbar-gutter: stable;}
 div[role="radiogroup"] {gap: 0.35rem; flex-wrap: wrap;}
