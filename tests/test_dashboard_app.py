@@ -225,3 +225,11 @@ def test_backtest_and_sealed_forecasts_are_named_apart(app):
     assert "Estimate (dt/ha)" not in text
     assert "90% range" in text and "not a hit rate" in text           # reviewers 2026-10-31: uncertainty + definition
     assert "Long-term average" not in text                             # one name on screen: "District normal"
+
+
+def test_how_to_read_is_one_click_away(app):
+    """User 2026-11-01: the reading guide sits behind an info button in the filter panel, not under the cards."""
+    text = _text(app)
+    assert "The five cards" in text and "Backtest and sealed forecasts" in text and "Limits" in text
+    assert "How to read the cards:" not in text
+    assert "How to read this dashboard" in text

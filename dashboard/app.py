@@ -498,6 +498,30 @@ st.markdown(f"<div class='band'><img class='logo' src='app/static/jmu_logo.png' 
 sb = st.sidebar
 sb.markdown("<div class='ftitle'>Filters</div><div class='sub' style='font-size:0.78rem'>apply to every card and "
             "view</div>", unsafe_allow_html=True)
+# How to read the page (user, 2026-11-01): one click away instead of a paragraph under the cards.
+with sb.popover("ⓘ How to read this dashboard", width="stretch"):
+    st.markdown(
+        f"**The five cards**\n"
+        f"- **Accuracy:** 100 minus the mean % error of the forecasts (not a hit rate), next to the comparison; "
+        f"the chip is the gain in percentage points, the 90% range comes from resampling whole seasons.\n"
+        f"- **Better in:** seasons in which the forecast was more accurate than the comparison.\n"
+        f"- **Within ±10%:** share of forecasts within 10% of the official yield.\n"
+        f"- **Poor crop-years:** crop-years at least 10% below normal, and how many the forecast flagged.\n"
+        f"- **{FC_YEAR} forecast:** the sealed forecast against the district normal.\n\n"
+        f"**Backtest and sealed forecasts**\n"
+        f"- {FIRST_YEAR}–{LAST_YEAR}: backtest forecasts, each season from a model trained only on earlier seasons.\n"
+        f"- {FC_YEAR}: sealed before the official figures; not scored until Destatis publishes the district yields.\n\n"
+        f"**How the numbers are averaged**\n"
+        f"- Cards 1–4: a plain mean over every district-crop-year with an official yield in the filters.\n"
+        f"- {FC_YEAR} card: weighted by each crop's area.\n\n"
+        f"**Colours**\n"
+        f"- Blue: our forecast, above normal, better. Red: below normal, worse. Grey: comparison. Black: official.\n\n"
+        f"**Limits**\n"
+        f"- The design (inputs, networks, settings; versions v1–v20) was chosen while these results were visible; "
+        f"a change was kept only if it passed a rule written in advance and tested on {FIRST_YEAR}–{EARLY_END}.\n"
+        f"- Uses weather up to harvest: it comes before the official statistics, not before the season.\n"
+        f"- Large losses in single districts are underestimated.\n\n"
+        f"Each card's own ⓘ explains that card in detail.")
 crop = sb.selectbox("Crop", ["All crops"] + CROPS, format_func=lambda c: c if c == "All crops" else cname(c),
                     key="f_crop")
 years = sb.select_slider("Years (backtest forecasts)", options=list(range(FIRST_YEAR, LAST_YEAR + 1)), value=DEFAULTS["f_years"],
@@ -635,13 +659,9 @@ st.markdown(f"<div class='sub' style='margin:6px 0 2px 0'>Selection: "
             f"{cname(crop) if crop != 'All crops' else 'all crops'} · {html.escape(scope)} · {yr_txt} · "
             f"{html.escape(MLABEL[model])} vs {html.escape(dn(ref))} · {plural(E.landkreis.nunique(), 'district')} · "
             f"{plural(len(E), 'backtest forecast')}</div>"
-            f"<div class='sub' style='margin:0 0 2px 0'>How to read the cards: the first four are scored on the "
-            f"backtest forecasts {FIRST_YEAR}–{LAST_YEAR}, a plain mean over every district-crop-year with an official "
-            f"yield (not every crop is grown in every district). Each season was forecast by a model trained only on "
-            f"earlier seasons, but the design (inputs, networks, settings; versions v1–v20) was chosen while these "
-            f"results were visible; a change was kept only if it passed a rule written in advance and tested on "
-            f"{FIRST_YEAR}–{EARLY_END}. The {FC_YEAR} card is weighted by crop area. The sealed {FC_YEAR} forecast "
-            f"is not scored yet: Destatis has not published its district yields.</div>",
+            f"<div class='sub' style='margin:0 0 2px 0'>Cards 1–4: backtest forecasts {FIRST_YEAR}–{LAST_YEAR} · "
+            f"the sealed {FC_YEAR} forecast is not scored yet · <b>ⓘ How to read this dashboard</b> in the filter "
+            f"panel</div>",
             unsafe_allow_html=True)
 
 VIEWS = ["Map", "District look-up", "Table & download", "Forecasts", "Compare"]

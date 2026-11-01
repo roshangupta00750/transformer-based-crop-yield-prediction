@@ -56,8 +56,8 @@ the same day (designer 6/10, end user 7/10) led to the changes listed under "Rul
   applies; the gaps are computed into the caption) and a "Data & method" box (question, data sources, model, test,
   links to code, model and data).
 - **Wording after two blind reviews (user, 2026-10-31)**: 2010–2025 are "backtest forecasts" (tables: season as
-  "2025 (harvest)", value column "Forecast"), 2026 onwards "sealed forecast"; never "estimate" on screen. A reading line
-  under the cards says the first four cards are a plain mean over the backtest forecasts, that the design was chosen
+  "2025 (harvest)", value column "Forecast"), 2026 onwards "sealed forecast"; never "estimate" on screen. A one-line note under the cards and an "ⓘ How to read this dashboard" button at the top of the
+  filter panel (user, 2026-11-01; a popover with the five cards, backtest vs sealed, averaging, colours and limits) say the first four cards are a plain mean over the backtest forecasts, that the design was chosen
   while these results were visible (changes kept only by the written rule on the decision window), that the 2026 card
   is area-weighted and that the sealed forecast is not scored yet. Accuracy card: "not a hit rate" in its tooltip and
   the 90% range of the gain from resampling whole seasons. One name for the long-term reference: "District normal"
