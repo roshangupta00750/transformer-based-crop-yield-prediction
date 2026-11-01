@@ -58,7 +58,7 @@ SEQ_BLUE = [[0.0, "#e3eefc"], [0.5, "#5c9ce6"], [1.0, "#0d366b"]]      # higher 
 SEQ_GREY = [[0.0, "#f1f0eb"], [0.5, "#a9a69d"], [1.0, "#3b3a36"]]      # neutral quantities (dt/ha, area)
 SEQ_RED = [[0.0, "#fbeaea"], [0.5, "#ec8f8e"], [1.0, "#a12a29"]]       # larger error = darker
 DIV = [[0.0, RED], [0.5, "#f2f1ee"], [1.0, BLUE]]                      # below / worse = red, above / better = blue
-CFG = {"displayModeBar": False}
+CFG = {"displayModeBar": False, "scrollZoom": False}   # the mouse wheel scrolls the page, never zooms the map away
 
 # Panel tints: each table / chart sits on its own light tint so the eye can tell sections apart (user, 2026-10-16).
 # Tints are decoration only; data colours (blue / red / grey / black) keep their meaning on every tint.
