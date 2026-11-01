@@ -126,7 +126,7 @@ st.markdown("""
 <style>
 [data-testid="stSidebarNav"] {display: none;}
 [data-testid="stAppViewContainer"], [data-testid="stMain"] {background: #f4f6f9;}
-[data-testid="stHeader"] {background: transparent;}
+[data-testid="stHeader"] {background: #f4f6f9;}   /* solid, so the hosting toolbar never sits on top of a chart */
 /* filter panel: fixed on the left, stays in view while the page scrolls */
 section[data-testid="stSidebar"] {width: 310px !important; min-width: 310px !important; background: #e8f0f9;
                                   border-right: 1px solid #cddcee;}
@@ -134,7 +134,7 @@ section[data-testid="stSidebar"] [data-testid="stSidebarHeader"] {padding: 0.6re
 section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {padding-top: 0.2rem;}
 section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {gap: 0.55rem;}
 .ftitle {font-size: 0.78rem; color: #184f95; text-transform: uppercase; letter-spacing: .04em; font-weight: 700;}
-.block-container {padding-top: 2.9rem; padding-bottom: 1rem; max-width: 1500px;}
+.block-container {padding-top: 3.4rem; padding-bottom: 5rem; max-width: 1500px;}
 .block-container [data-testid="stVerticalBlock"] {gap: 0.6rem;}
 .band {background: linear-gradient(100deg, #12345a 0%, #1d5a9c 62%, #2a78d6 100%); border-radius: 14px;
        padding: 12px 196px 9px 20px; margin-bottom: 1rem; position: relative; min-height: 70px;}   /* offsets Streamlit's -1rem under markdown */
@@ -145,7 +145,7 @@ section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {gap: 0.55rem;}
 .chip {display: inline-block; background: rgba(255,255,255,.16); color: #fff; border-radius: 12px; padding: 1px 10px;
        font-size: 0.78rem; margin: 0 6px 0 0; white-space: nowrap;}
 .limits {color: #d3e2f4; font-size: 0.78rem; margin: 4px 0 0 0;}
-.kcard {border: 1px solid #dfe3ea; border-radius: 10px; padding: 8px 12px; background: #fff; height: 104px;
+.kcard {border: 1px solid #dfe3ea; border-radius: 10px; padding: 8px 12px; background: #fff; height: 114px;
         position: relative;
         box-shadow: 0 1px 2px rgba(20,40,70,.06);}
 .kcard .t {font-size: 0.72rem; color: #5d6470; text-transform: uppercase; letter-spacing: .03em; white-space: nowrap;}
@@ -164,10 +164,18 @@ section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {gap: 0.55rem;}
 .gain {display: inline-block; border-radius: 10px; padding: 0 8px; font-size: 0.78rem; font-weight: 600;
        vertical-align: middle;}
 .sub {color: #5d6470; font-size: 0.84rem;}
-[class*="st-key-pnl-"] {border-radius: 12px; padding: 12px 14px 8px 14px; transition: box-shadow .2s;}
+[class*="st-key-pnl-"] {border-radius: 12px; padding: 12px 14px 14px 14px; transition: box-shadow .2s;}
+[class*="st-key-pnl-"] h5 {font-size: 0.98rem !important; font-weight: 650 !important; padding-bottom: 0.3rem;}
+/* panels side by side end at the same height: the last panel in a column grows (Streamlit wraps each panel) */
+[data-testid="stColumn"] > [data-testid="stVerticalBlock"]:has(> [data-testid="stLayoutWrapper"] > [class*="st-key-pnl-"]) {height: 100%;}
+[data-testid="stColumn"] > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]:last-child:has(> [class*="st-key-pnl-"]) {flex-grow: 1;}
+[data-testid="stLayoutWrapper"] > [class*="st-key-pnl-"] {height: 100%;}
+[data-testid="stCaptionContainer"] p {max-width: 900px;}
+html, [data-testid="stMain"] {scrollbar-gutter: stable;}
 div[role="radiogroup"] {gap: 0.35rem; flex-wrap: wrap;}
 div[role="radiogroup"] > label {border: 1px solid #d3d9e2; border-radius: 16px; padding: 1px 12px; background: #fff;
                                 margin: 0;}
+div[role="radiogroup"] > label p {font-size: 0.84rem;}   /* secondary pills smaller than the main view tabs */
 div[role="radiogroup"] > label > div:first-child {display: none;}
 div[role="radiogroup"] > label:has(input:checked) {border-color: #2a78d6; background: #2a78d6;}
 div[role="radiogroup"] > label:has(input:checked) p {color: #fff;}
@@ -177,7 +185,7 @@ table.tbl {width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-bo
 .tblwrap {overflow-x: auto;}
 table.tbl th {text-align: left; color: #4f5662; font-weight: 600; border-bottom: 1px solid rgba(0,0,0,.14);
               padding: 5px 8px; background: rgba(255,255,255,.55); vertical-align: bottom;}
-table.tbl td {border-bottom: 1px solid rgba(0,0,0,.06); padding: 4px 8px;}
+table.tbl td {border-bottom: 1px solid rgba(0,0,0,.06); padding: 4px 8px; white-space: nowrap;}
 table.tbl tbody tr:hover td {background: rgba(255,255,255,.7);}
 table.tbl td.n, table.tbl th.n {text-align: right; font-variant-numeric: tabular-nums;}
 table.tbl td.n {white-space: nowrap;}
@@ -419,7 +427,7 @@ def by_level(T: pd.DataFrame, cols: list, level: str) -> pd.DataFrame:
 
 
 def search_box(key: str, label: str = "Search district or state") -> str:
-    return st.text_input(label, key=key, placeholder="type part of a name", label_visibility="collapsed").strip().lower()
+    return st.text_input(label, key=key, placeholder="type part of a name").strip().lower()
 
 
 def layout(fig, h=340, **kw):
@@ -427,8 +435,8 @@ def layout(fig, h=340, **kw):
                       paper_bgcolor="rgba(0,0,0,0)",
                       font=dict(size=12, color=INK), legend=dict(orientation="h", y=-0.2, x=0, font=dict(size=11)),
                       hoverlabel=dict(font_size=12), **kw)
-    fig.update_xaxes(gridcolor="rgba(0,0,0,.08)", zeroline=False)
-    fig.update_yaxes(gridcolor="rgba(0,0,0,.08)", zeroline=False)
+    fig.update_xaxes(gridcolor="rgba(0,0,0,.08)", zeroline=False, tickfont=dict(size=11, color="#555"))
+    fig.update_yaxes(gridcolor="rgba(0,0,0,.08)", zeroline=False, tickfont=dict(size=11, color="#555"))
     return fig
 
 
@@ -491,14 +499,11 @@ st.markdown(f"<div class='band'><img class='logo' src='app/static/jmu_logo.png' 
             f"<span class='title'>YieldFormer-DE · district crop yields in Germany</span>"
             f"<span class='chip'>backtest forecasts 2010–2025: each season from a model that never saw it</span>"
             f"<span class='chip'>{html.escape(sealed)}</span>"
-            f"<div class='limits'>Limits: uses weather up to harvest, so it comes before the official statistics, not "
-            f"before the season · at 30 June no better than the 5-year average · large single-district losses are "
-            f"underestimated</div></div>", unsafe_allow_html=True)
+            f"<div class='limits'>Limits: made before the official statistics, not before the season · no better than the "
+            f"5-year average at 30 June · underestimates large losses in single districts</div></div>", unsafe_allow_html=True)
 
 sb = st.sidebar
-sb.markdown("<div class='ftitle'>Filters</div><div class='sub' style='font-size:0.78rem'>apply to every card and "
-            "view</div>", unsafe_allow_html=True)
-# How to read the page (user, 2026-11-01): one click away instead of a paragraph under the cards.
+# How to read the page (user, 2026-11-01): one click away, above the filters (UI review, 2026-11-01).
 with sb.popover("ⓘ How to read this dashboard", width="stretch"):
     st.markdown(
         f"**The five cards**\n"
@@ -522,6 +527,8 @@ with sb.popover("ⓘ How to read this dashboard", width="stretch"):
         f"- Uses weather up to harvest: it comes before the official statistics, not before the season.\n"
         f"- Large losses in single districts are underestimated.\n\n"
         f"Each card's own ⓘ explains that card in detail.")
+sb.markdown("<div class='ftitle' style='margin-top:14px'>Filters</div><div class='sub' style='font-size:0.78rem;"
+            "margin:2px 0 12px 0'>apply to every card and view</div>", unsafe_allow_html=True)
 crop = sb.selectbox("Crop", ["All crops"] + CROPS, format_func=lambda c: c if c == "All crops" else cname(c),
                     key="f_crop")
 years = sb.select_slider("Years (backtest forecasts)", options=list(range(FIRST_YEAR, LAST_YEAR + 1)), value=DEFAULTS["f_years"],
@@ -655,13 +662,13 @@ else:
     tot = area_weighted(F26.assign(landkreis="all")).iloc[0]
     card(k[4], "2026 forecast", f"{fs(tot)}%", "vs normal", accent=ACCENT["forecast"],
          help_=f"All crops, weighted by crop area. {int((nat.y_pred > nat.y_hist).sum())} of {len(nat)} crops above normal.")
-st.markdown(f"<div class='sub' style='margin:6px 0 2px 0'>Selection: "
+st.markdown(f"<div class='sub' style='margin:10px 0 2px 0'>Selection: "
             f"{cname(crop) if crop != 'All crops' else 'all crops'} · {html.escape(scope)} · {yr_txt} · "
             f"{html.escape(MLABEL[model])} vs {html.escape(dn(ref))} · {plural(E.landkreis.nunique(), 'district')} · "
             f"{plural(len(E), 'backtest forecast')}</div>"
             f"<div class='sub' style='margin:0 0 2px 0'>Cards 1–4: backtest forecasts {FIRST_YEAR}–{LAST_YEAR} · "
             f"the sealed {FC_YEAR} forecast is not scored yet · <b>ⓘ How to read this dashboard</b> in the filter "
-            f"panel</div>",
+            f"panel</div><div style='height:8px'></div>",
             unsafe_allow_html=True)
 
 VIEWS = ["Map", "District look-up", "Table & download", "Forecasts", "Compare"]
@@ -859,7 +866,8 @@ def hbars(val, lo, hi, ylab, text, title: str, *, opacity=None, customdata=None,
             wx += [l_, h_, None]
             wy += [y_, y_, None]
     if wx:
-        fig.add_trace(go.Scatter(x=wx, y=wy, mode="lines", line=dict(color="#5d6470", width=1.3), hoverinfo="skip"))
+        fig.add_trace(go.Scatter(x=wx, y=wy, mode="lines", line=dict(color="rgba(93,100,112,0.45)", width=1.3),
+                             hoverinfo="skip"))
     pos = val >= 0
     edge = np.where(pos, np.fmax(val, np.nan_to_num(hi, nan=-np.inf)), np.fmin(val, np.nan_to_num(lo, nan=np.inf)))
     fig.add_trace(go.Scatter(x=np.where(pos, edge + pad, edge - pad), y=ylab, mode="text", text=text,
@@ -891,7 +899,7 @@ def season_columns(d: pd.DataFrame, title: str, h=300):
     t = gains(d, "year", boot=0)
     fig = go.Figure(go.Bar(
         x=t.index, y=t.gain, marker_color=[BLUE if g >= 0 else RED for g in t.gain], text=[fs(g) for g in t.gain],
-        textposition="outside", cliponaxis=False, textfont=dict(size=10), customdata=np.c_[t.acc_m, t.acc_r],
+        textposition="outside", cliponaxis=False, textfont=dict(size=11), customdata=np.c_[t.acc_m, t.acc_r],
         hovertemplate="%{x}: %{y:+.1f} pp<br>accuracy %{customdata[0]:.1f}% vs %{customdata[1]:.1f}%<extra></extra>"))
     fig.add_hline(y=0, line_color=GREY, line_width=1)
     layout(fig, h, title=dict(text=title, font=dict(size=14), x=0), yaxis=dict(ticksuffix=" pp"),
@@ -1179,13 +1187,13 @@ if view == "Map":
                 st.caption(f"Bar: accuracy of the model minus the {rshort(ref)}, in percentage points. Thin line: 90% "
                            "range over seasons; a line crossing zero means the gain is not clear.")
             with panel("years", "teal"):
-                st.plotly_chart(season_columns(E, f"Gain by season · {scope}"), use_container_width=True, config=CFG,
+                st.plotly_chart(season_columns(E, f"Gain by season · {scope}", h=420), use_container_width=True, config=CFG,
                                 on_select=lambda: _year_click("year_main"), selection_mode="points", key="year_main")
                 st.caption("Click a season to show only that season.")
 
     # Season by season as lines (user, 2026-10-31): does the forecast follow good and poor years, and how accurate
     # was it each season? Both follow every filter.
-    l2, r2 = st.columns(2)
+    l2, r2 = st.columns([1.15, 1])
     with l2, panel("swing", "slate"):
         st.plotly_chart(swing_trend(E, F26, f"Forecast vs official, season by season · {scope}"),
                         use_container_width=True, config=CFG, on_select=lambda: _year_click("swing_main"),
@@ -1198,7 +1206,7 @@ if view == "Map":
                         on_select=lambda: _year_click("acc_main"), selection_mode="points", key="acc_main")
         st.caption("Accuracy (100 minus the mean % error) of the backtest forecasts in each season, next to the "
                    "comparison. Poor seasons such as 2018 are where the simple averages fall furthest.")
-    l3, r3 = st.columns([1, 1])
+    l3, r3 = st.columns([1.15, 1])
     with l3, panel("bydate", "violet"):
         fig, g_ = date_chart(f"Accuracy by forecast date · {cname(crop) if crop != 'All crops' else 'all crops'} · "
                          f"Germany · {FIRST_YEAR}–{LAST_YEAR}")
@@ -1207,7 +1215,7 @@ if view == "Map":
         else:
             st.plotly_chart(fig, use_container_width=True, config=CFG)
             st.caption("30 June and 31 July: the same networks run with weather and satellite data cut at that date "
-                       "(version v20, tested, not adopted). Harvest: the final model. Only the Crop filter applies. "
+                       "(a test version, not used for the final model). Harvest: the final model. Only the Crop filter applies. "
                        f"Gap to the 5-year average: {fs(g_[0])} pp at 30 June, {fs(g_[1])} at 31 July, "
                        f"{fs(g_[-1])} at harvest.")
     with r3, panel("about", "sky"):
@@ -1223,9 +1231,11 @@ if view == "Map":
             f"iTransformer, PatchTST) plus a district error memory.\n"
             f"- **Test:** each season {FIRST_YEAR}–{LAST_YEAR} forecast by a model trained only on earlier seasons "
             f"(backtest); the {FC_YEAR} forecast sealed with a SHA-256 fingerprint before the official figures.\n"
-            "- **This dashboard online:** yieldformer-de.streamlit.app\n"
-            "- **Code:** github.com/roshangupta00750/transformer-based-crop-yield-prediction · **Model and data:** "
-            "huggingface.co/Roshangupta007/YieldFormer-DE · **Report:** the written project report (JMU Würzburg).")
+            "- **Links:** [dashboard](https://yieldformer-de.streamlit.app) · "
+            "[code](https://github.com/roshangupta00750/transformer-based-crop-yield-prediction) · "
+            "[model](https://huggingface.co/Roshangupta007/YieldFormer-DE) · "
+            "[data](https://huggingface.co/datasets/Roshangupta007/YieldFormer-DE-data) · report: the written project "
+            "report (JMU Würzburg).")
 
 elif view == "District look-up":
     names = sorted(pool.district.dropna().unique())
@@ -1387,32 +1397,33 @@ elif view == "Forecasts":
             st.caption(f"{int((v >= 0).sum())} of {plural(len(v), 'district')} above their normal yield.")
     with right, panel("sealed", "green"):
         st.markdown("##### Sealed forecast files")
-        st.caption("Each forecast was saved as a file before its season's official yields existed, and its SHA-256 "
-                   "fingerprint was recorded the same day in FROZEN.sha256 (kept in the project's git history). The "
-                   "fingerprint is recomputed here every time: ✓ means the file is byte for byte the one sealed on "
-                   "its issue date. Download a file to check it yourself: sha256sum -c FROZEN.sha256. The 2027 and 2028 "
-                   "files carry 'yieldformer' in their names but contain district normals: the model's rule for a "
-                   "season that has not started. A public copy is on Hugging Face (Roshangupta007/YieldFormer-DE), "
-                   "uploaded 30 Oct 2026, after the issue dates.")
+        st.caption("Each file was saved before its season's official yields existed and fingerprinted (SHA-256) the "
+                   "same day. ✓ = the file is unchanged since then.")
+        with st.expander("Details: how the check works"):
+            st.caption("The fingerprints were recorded on the issue date in FROZEN.sha256 (kept in the project's git "
+                       "history) and are recomputed on every page load. Download a file and check it yourself with "
+                       "sha256sum -c FROZEN.sha256. The 2027 and 2028 files carry 'yieldformer' in their names but "
+                       "contain district normals, the model's rule for a season that has not started. A public copy is "
+                       "on Hugging Face (Roshangupta007/YieldFormer-DE), uploaded 30 Oct 2026, after the issue dates.")
         if SF.empty:
             st.info("No sealed files found in results/forecasts.")
         else:
             kind = F_ALL.drop_duplicates("file").set_index("file").model.to_dict()
 
-            def label(f: str) -> str:
+            def label(f: str) -> str:                 # short, so the table fits beside the chart
                 if f == META_FILE:
-                    return "YieldFormer-DE (v18) · final model"
+                    return "Final model (v18)"
                 if "baseline" in f:
-                    return "District normal · pre-registered"
+                    return "Normal · pre-registered"
                 if kind.get(f) == "District normal":
-                    return "District normal · rule before the season"
+                    return "District normal"
                 if kind.get(f):
-                    return f"{kind[f]} · earlier main model"
+                    return "Earlier model (v15)"
                 return "Pre-registered test (v1)"
             table(pd.DataFrame({"Season": SF.year.astype(int), "Forecast": SF.file.map(label),
-                                "Issued": SF.issued.map(dfmt), "Fingerprint": SF.recorded.str[:12] + "…",
-                                "Check": SF.check.map({"ok": "✓ unchanged", "changed": "✗ changed",
-                                                       "missing": "file missing"})}),
+                                "Issued": SF.issued.map(lambda d: pd.Timestamp(d).strftime("%-d %b")), "Fingerprint": SF.recorded.str[:8] + "…",
+                                "Unchanged": SF.check.map({"ok": "✓", "changed": "✗ changed",
+                                                           "missing": "file missing"})}),
                   numeric=("Season",))
             pick = st.selectbox("Sealed file", SF.file, key="sealed_pick", label_visibility="collapsed",
                                 format_func=lambda f: f"{f}")
@@ -1464,11 +1475,9 @@ elif view == "Forecasts":
             R = R.merge(OFFICIAL[OFFICIAL.year == FC_YEAR][["landkreis", "crop", "official"]],
                         on=["landkreis", "crop"], how="inner")
         if OFFICIAL.empty or R.empty:
-            st.markdown(f"<div class='sub'>Not revealed yet: Destatis has not published the {FC_YEAR} district yields. "
-                        "When it does, this panel fills in by itself and scores both sealed files against the official "
-                        f"yields: the pre-registered test file of {dfmt(V1.issued.iloc[0]) if len(V1) else '–'} and the "
-                        f"final model's file of {dfmt(META.issued) if META is not None else '–'}, each next to the "
-                        "district normal. The ✓ above shows both files are unchanged.</div>",
+            st.markdown(f"<div class='sub'>Not scored yet: fills in by itself when Destatis publishes the {FC_YEAR} "
+                        f"district yields, for the pre-registered file of {dfmt(V1.issued.iloc[0]) if len(V1) else '–'} "
+                        f"and the final model's file of {dfmt(META.issued) if META is not None else '–'}.</div>",
                         unsafe_allow_html=True)
         else:
             a_m, a_n = acc(R.y_pred, R.official), acc(R.y_hist, R.official)
@@ -1523,20 +1532,21 @@ elif view == "Forecasts":
                 table(R.assign(**{c: R[c].map(f1) for c in R.columns[1:]}), numeric=tuple(R.columns[1:]))
             ahead_w = R.iloc[0, 1] < R.iloc[2, 1]
             ahead_p = R.iloc[0, 2] < R.iloc[2, 2]
-            rc.caption("Mean absolute error of the national yield. A national yield is the district yields weighted by "
-                       f"crop area: on that basis YieldFormer-DE is {'closer' if ahead_w else 'further away'} than the "
-                       f"district normal. With a plain mean of the districts it is "
-                       f"{'closer' if ahead_p else 'further away'}. One season and preliminary figures: this is not the "
-                       "registered test, which uses the district yields once published. These preliminary figures were "
-                       "published in August 2026 (potatoes 24 Sep), before every 2026 file was sealed; the final "
-                       "model was chosen by the written rule on earlier seasons, not by this check.")
+            rc.caption(f"Average error of the national yield. Weighted by crop area, as official national yields are, "
+                       f"YieldFormer-DE is {'closer' if ahead_w else 'further away'} than the district normal; as a plain "
+                       f"mean of districts it is {'closer' if ahead_p else 'further away'}. One season, preliminary "
+                       "figures: not the registered test.")
+            with rc.expander("Details"):
+                st.caption("The preliminary figures were published in August 2026 (potatoes 24 Sep), before every 2026 "
+                           "file was sealed. The final model was chosen by the written rule on earlier seasons, not by "
+                           "this check. The registered test uses the district yields once Destatis publishes them.")
 else:  # Compare
     part = st.radio("Benchmark", ["Simple averages and members", "Seasons & regions", "Published models",
                                   "JRC MARS 2025", "Poor years", "Computing cost"],
                     horizontal=True, key="cmp_part")
     if part == "Simple averages and members":
         early, late = E[E.year <= EARLY_END], E[E.year > EARLY_END]
-        rows = [{"Model": MLABEL.get(m, m),
+        rows = [{"Model": MLABEL.get(m, dn(m)),
                  f"{FIRST_YEAR}–{EARLY_END} accuracy (%)": f1(acc(early[m], early.actual)) if len(early) else "–",
                  f"{EARLY_END + 1}–{LAST_YEAR} accuracy (%)": f1(acc(late[m], late.actual)) if len(late) else "–",
                  f"{yr_txt} accuracy (%)": f1(acc(E[m], E.actual)),
@@ -1547,8 +1557,9 @@ else:  # Compare
             R = pd.DataFrame(rows)
             table(R, numeric=tuple(R.columns[1:]))
             st.caption("All models are scored on exactly the same rows. A single TFT is about as accurate as the ensemble; "
-                       f"XGBoost on the same inputs comes close in {EARLY_END + 1}–{LAST_YEAR}. The ensemble is kept "
-                       "because it is steadier across years and crops.")
+                       f"XGBoost on the same inputs comes close in {EARLY_END + 1}–{LAST_YEAR}. The ensemble was chosen "
+                       f"by the rule written in advance and tested on {FIRST_YEAR}–{EARLY_END}; Seasons & regions shows "
+                       "how each model ranks season by season.")
     elif part == "Seasons & regions":
         short = {MODEL: "YieldFormer-DE", "YieldFormer-DE-T (v17)": "TFT", "YieldFormer-DE-i (v15)": "iTransformer",
                  "YieldFormer-DE-P (v17)": "PatchTST", "XGBoost + memory (reference)": "XGBoost ref.",

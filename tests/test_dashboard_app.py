@@ -203,7 +203,7 @@ def test_sealed_files_are_recomputed_and_unchanged():
     at.run()
     at.radio(key="view").set_value("Forecasts").run()
     text = _text(at)
-    assert "✓ unchanged" in text and "✗ changed" not in text and "file missing" not in text
+    assert "✓</td>" in text and "✗ changed" not in text and "file missing" not in text
 
 
 @pytest.mark.parametrize("season", [0, 1, 2])
