@@ -19,21 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-────────────────────────────────────────────────────────────────────────────
-
-Data licensing (source datasets follow their upstream licences, NOT MIT):
-
-  • DWD Open Data (weather):           CC BY 4.0 with DWD attribution.
-  • Destatis crop yield statistics:    "Data Licence Germany – Attribution 2.0"
-                                       (https://www.govdata.de/dl-de/by-2-0).
-  • MODIS via Google Earth Engine:     NASA / USGS public domain, attribution
-                                       required per MOD13Q1 / MOD15A2H terms.
-  • SoilGrids 2.0:                     CC BY 4.0 (ISRIC).
-  • EU GISCO NUTS shapefiles:          EuroGeographics attribution required.
-  • CMIP6 EC-Earth3-CC & MPI-ESM1-2-LR: Individual CMIP6 model licences at
-                                       https://esgf-node.llnl.gov/projects/cmip6/
-                                       (typically CC BY 4.0 with attribution).
-
-If you redistribute processed data derived from these sources, you must
-preserve the upstream attribution and licence terms above.
