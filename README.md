@@ -114,7 +114,7 @@ Würzburg cluster; change them for another cluster.
 - `results/forecasts/`: sealed forecast files with their fingerprints
 - `results/dashboard/`: tables the dashboard reads
 - `dashboard/`: the Streamlit app (`main.py`, `app.py`), its specification and launchers
-- `paper/`: pre-registrations of all versions and paper drafts
+- `paper/`: the written plans (pre-registrations) of all versions and the analysis behind the decision rule
 - `tests/`: unit tests for the data windows, the networks, the error memory and the dashboard
 
 The project started in summer 2026 as a benchmark of six architectures (XGBoost, DLinear, LSTM, PatchTST,

@@ -88,3 +88,14 @@ scripts/orchestrate_retrain_landfeatures.sh
 scripts/68_compute_cost.py
 scripts/cropaware_watcher.sh
 checkpoints/
+
+# Confidential until publication (user, 2026-11-02): paper drafts, the written report and presentations.
+# Only the written plans (pre-registrations) and the decision-rule analysis in paper/ are public.
+paper/*
+!paper/preregistration_*.md
+!paper/v6_workflow/
+Paper_Agriculture/
+*.pptx
+*.ppt
+*.key
+thesis*.pdf
