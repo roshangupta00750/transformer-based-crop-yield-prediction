@@ -497,8 +497,11 @@ def _set_from(target: str, key: str):
 
 # --------------------------------------------------------------------------- header + filter panel (left sidebar)
 sealed = f"2026 forecast sealed {dfmt(META.issued)} · data to {dfmt(META.data_end)}" if META is not None else ""
-LOGO = ("<img class='logo' src='app/static/jmu_logo.png' alt='Universität Würzburg'>"   # local only: the logo
-        if (GEO_FILE.parent / "jmu_logo.png").exists() else "")                          # is not in the public repo
+# University logo: the local file where it exists; otherwise the official logo served by the university's own
+# website, so the logo file never has to be in the public repository (user, 2026-11-03).
+LOGO_URL = ("app/static/jmu_logo.png" if (GEO_FILE.parent / "jmu_logo.png").exists() else
+            "https://www.uni-wuerzburg.de/typo3conf/ext/uw_sitepackage/Resources/Public/Images/uni-wuerzburg-logo.svg")
+LOGO = f"<img class='logo' src='{LOGO_URL}' alt='Universität Würzburg'>"
 BAND = "band" if LOGO else "band nologo"
 st.markdown(f"<div class='{BAND}'>{LOGO}"
             f"<span class='title'>YieldFormer-DE · district crop yields in Germany</span>"
