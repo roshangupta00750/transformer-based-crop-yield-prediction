@@ -11,7 +11,7 @@ data/processed/*
 # dataset.parquet is no longer bundled: 351.7 MB on 2026-10-01, over Knot's 100 MB
 # safety limit, which held every auto-commit. Kept on disk only (owner decision).
 !data/processed/dataset.policy.json
-!data/processed/cmip6_nuts3.parquet
+# (cmip6_nuts3.parquet no longer bundled, 2026-11-03)
 
 # Bundle the fused-model prediction caches (small; recomputing needs
 # checkpoints we do not distribute).
@@ -99,3 +99,16 @@ Paper_Agriculture/
 *.ppt
 *.key
 thesis*.pdf
+
+# Not code (user, 2026-11-03): university logo (usage rights), old screenshots, unused climate data,
+# access files and local tool folders.
+dashboard/static/jmu_logo.png
+results/dashboard/screenshots/
+data/processed/cmip6_nuts3.parquet
+.cdsapirc
+*credentials*.json
+.config/earthengine/
+.streamlit/secrets.toml
+.claude/
+.knot/
+.idea/
