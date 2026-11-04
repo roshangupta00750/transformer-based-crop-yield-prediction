@@ -54,19 +54,26 @@ wake up).
 
 - Model checkpoints (the three networks of YieldFormer-DE and version v20):
   https://huggingface.co/Roshangupta007/YieldFormer-DE
-- Training data set (`data/processed/dataset.parquet` and `data/processed/static/`):
-  https://huggingface.co/datasets/Roshangupta007/YieldFormer-DE-data
+- Data set, two copies of the same files:
+  - GitHub release: https://github.com/roshangupta00750/transformer-based-crop-yield-prediction/releases/tag/v1.0.0
+  - Hugging Face, with a table viewer: https://huggingface.co/datasets/Roshangupta007/YieldFormer-DE-data
 
-Put the data files in `data/processed/` and the checkpoints in `results/checkpoints/` (file names unchanged)
-to re-run the evaluation without downloading the raw sources.
+  The training table of the final model is `dataset_v5_hybridW.parquet` with its `dataset_v5_hybridW.policy.json`
+  (26.5 million rows, one per district, crop and day). On Hugging Face the same file is called `dataset.parquet`
+  and `dataset.policy.json`. The release also holds the official district yields and the backtest forecasts
+  2010–2025.
+
+Put the training table and its policy file in `data/processed/` under the names `dataset_v5_hybridW.parquet` and
+`dataset_v5_hybridW.policy.json` (the names the final configs read), and the checkpoints in `results/checkpoints/`
+(file names unchanged), to re-run the evaluation without downloading the raw sources.
 The dashboard and its tests also need the district shapes, which `python scripts/00_build_geo.py` downloads
 from GISCO.
 
 ## Dashboard
 
 A one-screen Streamlit dashboard shows the estimates, the sealed forecasts and all comparisons. Filters on the
-left (crop, years, region, state, district, comparison, model) apply to every card and view. It runs on the
-local machine only.
+left (crop, years, region, state, district, comparison, model) apply to every card and view. It runs online
+(link above) and on the local machine.
 
 ```bash
 ./dashboard/run.sh          # http://127.0.0.1:8502
@@ -92,7 +99,7 @@ Main steps of the pipeline:
 |---|---|
 | District shapes | `scripts/00_build_geo.py` |
 | Download weather, satellite, soil and yield data (needs Copernicus CDS and Google Earth Engine accounts) | `scripts/01_download_data.py` |
-| Build the data set | `scripts/02_preprocess.py` |
+| Build the data set used by the final model (`data/processed/dataset_v5_hybridW.parquet`) | `scripts/42_build_dataset_v4.py`, then `scripts/55_build_dataset_v5.py --weather hybrid --out data/processed/dataset_v5_hybridW.parquet` |
 | Train a network for one season and seed | `scripts/03_train.py` |
 | Fine-tune it per crop | `scripts/47_finetune_per_crop.py` |
 | Evaluate the final ensemble | `scripts/74_eval_v18.py` |

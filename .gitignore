@@ -87,7 +87,10 @@ scripts/run_finetune.sh
 scripts/orchestrate_retrain_landfeatures.sh
 scripts/68_compute_cost.py
 scripts/cropaware_watcher.sh
-checkpoints/
+/checkpoints/
+
+# Third-party code cloned for the equal-protocol comparison (not ours to publish)
+external/
 
 # Confidential until publication (user, 2026-11-02): paper drafts, the written report and presentations.
 # Only the written plans (pre-registrations) and the decision-rule analysis in paper/ are public.
