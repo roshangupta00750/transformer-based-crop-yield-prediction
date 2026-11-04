@@ -50,24 +50,32 @@ earlier seasons. This covers 37,383 district-crop-years in 363 districts.
 https://yieldformer-de.streamlit.app (free hosting: after a quiet period it sleeps and takes about half a minute to
 wake up).
 
-## Model and data downloads
+## Data set
 
-- Model checkpoints (the three networks of YieldFormer-DE and version v20):
-  https://huggingface.co/Roshangupta007/YieldFormer-DE
-- Data set, two copies of the same files:
-  - GitHub release: https://github.com/roshangupta00750/transformer-based-crop-yield-prediction/releases/tag/v1.0.0
-  - Hugging Face, with a table viewer: https://huggingface.co/datasets/Roshangupta007/YieldFormer-DE-data
+The data set has two identical copies: a [GitHub release](https://github.com/roshangupta00750/transformer-based-crop-yield-prediction/releases/tag/v1.0.0) for download and
+[Hugging Face](https://huggingface.co/datasets/Roshangupta007/YieldFormer-DE-data) with a table viewer in the browser. Each link below goes straight to the file.
 
-  The training table of the final model is `dataset_v5_hybridW.parquet` with its `dataset_v5_hybridW.policy.json`
-  (26.5 million rows, one per district, crop and day). On Hugging Face the same file is called `dataset.parquet`
-  and `dataset.policy.json`. The release also holds the official district yields and the backtest forecasts
-  2010–2025.
+| File | Content | GitHub | Hugging Face |
+|---|---|---|---|
+| Training table of the final model | One row per district, crop and day: weather, satellite, soil, crop stages, official yield (26.5 million rows, 624 MB) | [dataset_v5_hybridW.parquet](https://github.com/roshangupta00750/transformer-based-crop-yield-prediction/releases/download/v1.0.0/dataset_v5_hybridW.parquet) | [download](https://huggingface.co/datasets/Roshangupta007/YieldFormer-DE-data/resolve/main/dataset.parquet) · [view](https://huggingface.co/datasets/Roshangupta007/YieldFormer-DE-data/viewer/daily_inputs) |
+| Its policy file | Columns and build notes; keep it next to the table | [dataset_v5_hybridW.policy.json](https://github.com/roshangupta00750/transformer-based-crop-yield-prediction/releases/download/v1.0.0/dataset_v5_hybridW.policy.json) | [download](https://huggingface.co/datasets/Roshangupta007/YieldFormer-DE-data/resolve/main/dataset.policy.json) |
+| Official yields | Destatis district yields per crop and year, 1999–2025 (dt/ha) | [official_yields.parquet](https://github.com/roshangupta00750/transformer-based-crop-yield-prediction/releases/download/v1.0.0/official_yields.parquet) | [download](https://huggingface.co/datasets/Roshangupta007/YieldFormer-DE-data/resolve/main/official_yields.parquet) · [view](https://huggingface.co/datasets/Roshangupta007/YieldFormer-DE-data/viewer/official_yields) |
+| Backtest forecasts | Forecasts 2010–2025 of YieldFormer-DE, its members, the XGBoost reference and the baselines, with the official yield | [backtest_forecasts_2010_2025.parquet](https://github.com/roshangupta00750/transformer-based-crop-yield-prediction/releases/download/v1.0.0/backtest_forecasts_2010_2025.parquet) | [download](https://huggingface.co/datasets/Roshangupta007/YieldFormer-DE-data/resolve/main/backtest_forecasts_2010_2025.parquet) · [view](https://huggingface.co/datasets/Roshangupta007/YieldFormer-DE-data/viewer/backtest_forecasts_2010_2025) |
+| District codes | German district keys (AGS) and NUTS-3 codes | [district_codes.parquet](https://github.com/roshangupta00750/transformer-based-crop-yield-prediction/releases/download/v1.0.0/district_codes.parquet) | [download](https://huggingface.co/datasets/Roshangupta007/YieldFormer-DE-data/resolve/main/district_codes.parquet) · [view](https://huggingface.co/datasets/Roshangupta007/YieldFormer-DE-data/viewer/district_codes) |
+| Checksums | SHA-256 of every file (`shasum -a 256 -c SHA256SUMS.txt`) | [SHA256SUMS.txt](https://github.com/roshangupta00750/transformer-based-crop-yield-prediction/releases/download/v1.0.0/SHA256SUMS.txt) | |
 
-Put the training table and its policy file in `data/processed/` under the names `dataset_v5_hybridW.parquet` and
-`dataset_v5_hybridW.policy.json` (the names the final configs read), and the checkpoints in `results/checkpoints/`
-(file names unchanged), to re-run the evaluation without downloading the raw sources.
-The dashboard and its tests also need the district shapes, which `python scripts/00_build_geo.py` downloads
-from GISCO.
+On Hugging Face the training table is called `dataset.parquet` (with `dataset.policy.json`). To re-run the code,
+save the training table and its policy file in `data/processed/` as `dataset_v5_hybridW.parquet` and
+`dataset_v5_hybridW.policy.json`, the names the final configs read. The table can also be rebuilt from the raw
+sources with `scripts/42_build_dataset_v4.py` and then `scripts/55_build_dataset_v5.py --weather hybrid`.
+The data combine public sources that keep their own licences, see `DATA_LICENSES.md`.
+
+## Model download
+
+Model checkpoints (the three networks of YieldFormer-DE and version v20) and the sealed forecasts:
+https://huggingface.co/Roshangupta007/YieldFormer-DE. Put the checkpoints in `results/checkpoints/` (file names
+unchanged) to re-run the evaluation. The dashboard and its tests also need the district shapes, which
+`python scripts/00_build_geo.py` downloads from GISCO.
 
 ## Dashboard
 
